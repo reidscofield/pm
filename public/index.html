@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hydro-Wates · Project Manager</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='80' font-size='80'%3E%F0%9F%92%A7%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-logo" src="/logo.jpg" alt="Hydro-Wates — Proof-Load Testing Services"
+         onerror="this.closest('.brand').classList.add('no-logo')">
+    <span class="brand-fallback">
+      <span class="brand-drop">💧</span>
+      <span class="brand-name">Hydro-Wates</span>
+      <span class="brand-sub">Project Manager</span>
+    </span>
+  </div>
+  <nav class="nav">
+    <button class="nav-btn" data-action="nav" data-view="dashboard">Dashboard</button>
+    <button class="nav-btn" data-action="nav" data-view="po">Invoices</button>
+    <button class="nav-btn" data-action="nav" data-view="templates">Planning questions</button>
+    <button class="nav-btn" data-action="nav" data-view="settings">Settings</button>
+  </nav>
+  <div class="topbar-right">
+    <span id="buildTag" style="font-size:11px;opacity:.55;white-space:nowrap"></span>
+    <span id="syncStatus" class="sync-status"></span>
+    <button id="syncBtn" class="btn primary" data-action="sync-now">⟳ Sync</button>
+    <button id="logoutBtn" class="btn" data-action="logout" hidden></button>
+  </div>
+</header>
+
+<main id="view" class="view"></main>
+
+<div id="modal"></div>
+<div id="authGate"></div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/app.js"></script>
+</body>
+</html>

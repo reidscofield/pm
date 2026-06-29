@@ -1,0 +1,18 @@
+# Secrets — never commit these
+.env
+.env.local
+
+# Local state files (live in Supabase once deployed; contain secrets locally)
+data/
+
+# OneDrive sync-conflict copies
+*-DESKTOP-*
+*-PC-*
+
+# OS / editor noise
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Claude Code local tooling config
+.claude/

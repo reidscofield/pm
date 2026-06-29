@@ -1,0 +1,8 @@
+# Never upload secrets or local state to Vercel (storage lives in Supabase in prod)
+.env
+.env.local
+data/
+
+# OneDrive sync-conflict copies
+*-DESKTOP-*
+*-PC-*
