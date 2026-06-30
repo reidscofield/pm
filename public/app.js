@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-06-29 · 28';
+const BUILD = 'build 2026-06-29 · 29';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -137,11 +137,17 @@ function renderLogin(msg) {
   if (!gate) return;
   gate.innerHTML =
     '<div class="auth-overlay"><div class="auth-card">' +
-      '<div class="auth-brand"><span class="brand-drop">💧</span> Hydro-Wates</div>' +
-      '<div class="auth-title">Project Manager</div>' +
+      '<img class="auth-logo" id="authLogo" src="/logo.jpg" alt="Hydro-Wates — Proof-Load Testing Services">' +
+      '<div class="auth-title">Project Management</div>' +
       '<p class="auth-sub">Sign in with your Hydro-Wates account.</p>' +
       '<p id="authErr" class="auth-err"' + (msg ? '' : ' hidden') + '>' + (msg ? esc(msg) : '') + '</p>' +
-      '<button class="btn auth-ms" id="authMs">Sign in with Microsoft</button>' +
+      '<button class="btn auth-ms" id="authMs">' +
+        '<svg class="ms-logo" viewBox="0 0 21 21" width="17" height="17" aria-hidden="true">' +
+          '<rect x="1" y="1" width="9" height="9" fill="#F25022"></rect>' +
+          '<rect x="11" y="1" width="9" height="9" fill="#7FBA00"></rect>' +
+          '<rect x="1" y="11" width="9" height="9" fill="#00A4EF"></rect>' +
+          '<rect x="11" y="11" width="9" height="9" fill="#FFB900"></rect>' +
+        '</svg>Sign in with Microsoft</button>' +
       '<div class="auth-or"><span>or work email</span></div>' +
       '<form id="authForm">' +
         '<input id="authEmail" type="email" placeholder="you@hydrowates.com" required autocomplete="username">' +
@@ -153,6 +159,8 @@ function renderLogin(msg) {
   if (form) form.addEventListener('submit', doEmailLogin);
   const ms = document.getElementById('authMs');
   if (ms) ms.addEventListener('click', doMicrosoftLogin);
+  const logo = document.getElementById('authLogo');
+  if (logo) logo.onerror = function () { this.outerHTML = '<div class="auth-brand"><span class="brand-drop">💧</span> Hydro-Wates</div>'; };
 }
 
 async function doEmailLogin(e) {

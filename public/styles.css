@@ -274,11 +274,14 @@ table.items td.num, table.items th.num { text-align: right; white-space: nowrap;
 .auth-card { background: #fff; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.35);
   padding: 32px 30px; width: 100%; max-width: 360px; text-align: center; }
 .auth-brand { font-size: 22px; font-weight: 800; color: #0b5e8a; }
+.auth-logo { display: block; max-width: 220px; max-height: 64px; width: auto; height: auto; margin: 2px auto 6px; }
 .auth-title { font-size: 13px; color: #64727c; letter-spacing: .06em; text-transform: uppercase; margin-top: 2px; }
 .auth-sub { color: #64727c; font-size: 14px; margin: 14px 0 16px; }
 .auth-err { background: #fdecea; color: #b3261e; border-radius: 8px; padding: 8px 10px; font-size: 13px; margin: 0 0 14px; text-align: left; }
-.auth-ms { width: 100%; justify-content: center; background: #2f2f2f; color: #fff; padding: 11px; font-size: 15px; }
+.auth-ms { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  background: #2f2f2f; color: #fff; padding: 11px; font-size: 15px; }
 .auth-ms:hover { background: #1f1f1f; }
+.ms-logo { flex: none; display: block; }
 .auth-or { display: flex; align-items: center; gap: 10px; color: #9aa6ae; font-size: 12px; margin: 16px 0; }
 .auth-or::before, .auth-or::after { content: ''; flex: 1; height: 1px; background: #e3e9ee; }
 #authForm { display: flex; flex-direction: column; gap: 10px; }
