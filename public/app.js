@@ -1,17 +1,17 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-06-29 · 29';
+const BUILD = 'build 2026-06-29 · 31';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const esc = (s) => String(s === undefined || s === null ? '' : s)
   .replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-// Can the app send email? Microsoft 365 (Graph) is preferred; SMTP is the fallback.
+// Can the CURRENT user send email? Only if they signed in with Microsoft (so we
+// have their token to send as them). No shared account, no SMTP.
 function emailReady() {
-  const s = state.settings || {};
-  return !!(s.msConnected || (s.smtp && s.smtp.host && s.smtp.user));
+  return !!msGraphToken;
 }
 
 const CATS = [
@@ -109,6 +109,7 @@ async function api(method, url, body) {
 /* ---------------- auth (Supabase login) ---------------- */
 let SB = null;          // supabase-js client (only when login is required)
 let authToken = null;   // current access token, sent on every api() call
+let msGraphToken = null; // the logged-in user's Microsoft token — used to send email AS them
 
 // Returns true if the app may proceed, false if the login screen is showing.
 async function initAuth() {
@@ -123,10 +124,14 @@ async function initAuth() {
   SB = window.supabase.createClient(cfg.url, cfg.anonKey, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   });
-  SB.auth.onAuthStateChange((_e, session) => { authToken = session ? session.access_token : null; });
+  SB.auth.onAuthStateChange((_e, session) => {
+    authToken = session ? session.access_token : null;
+    if (session && session.provider_token) msGraphToken = session.provider_token;   // Microsoft sign-in token
+  });
   const { data: { session } } = await SB.auth.getSession();
   if (!session) { renderLogin(); return false; }
   authToken = session.access_token;
+  if (session.provider_token) msGraphToken = session.provider_token;   // present right after a Microsoft sign-in
   const lb = document.getElementById('logoutBtn');
   if (lb) { lb.hidden = false; lb.textContent = 'Sign out' + (session.user && session.user.email ? ' · ' + session.user.email : ''); }
   return true;
@@ -181,7 +186,11 @@ async function doEmailLogin(e) {
 }
 async function doMicrosoftLogin() {
   if (!SB) return;
-  await SB.auth.signInWithOAuth({ provider: 'azure', options: { redirectTo: location.origin } });
+  // Ask for Mail.Send so the app can email AS the person who's signing in.
+  await SB.auth.signInWithOAuth({
+    provider: 'azure',
+    options: { redirectTo: location.origin, scopes: 'openid email profile offline_access https://graph.microsoft.com/Mail.Send' }
+  });
 }
 async function doLogout() {
   try { if (SB) await SB.auth.signOut(); } catch (e) {}
@@ -528,7 +537,7 @@ function planningTabHtml(d) {
       '<button class="btn" data-action="plan-print">🖨 Print / save PDF</button>' +
       '<button class="btn" data-action="plan-save">Save</button>' +
     '</div>' +
-    (smtpReady ? '' : '<div class="sent-note">“Send now” emails the ticked contacts straight from the app once you <a href="#settings">connect Microsoft 365 in Settings</a> (recommended). Until then, use “Open email draft”.</div>') +
+    (smtpReady ? '' : '<div class="sent-note">“Send now” emails the ticked contacts from <b>your own</b> mailbox once you <b>sign in with Microsoft</b>. Until then, use “Open email draft”.</div>') +
     (log ? '<div class="sent-note"><b>Send history</b>' + log + '</div>'
          : (p.sentAt ? '<div class="sent-note">First sent to customer: ' + esc(new Date(p.sentAt).toLocaleString()) + '</div>' : ''));
 }
@@ -928,7 +937,7 @@ function procedureTabHtml(d) {
       '<button class="btn" data-action="proc-save">Save</button>' +
       '<button class="btn" data-action="proc-generate">↻ Regenerate</button>' +
     '</div>' +
-    (smtpReady ? '' : '<div class="sent-note">“Send to customer” emails directly once you <a href="#settings">connect Microsoft 365 in Settings</a> (recommended). Until then, use “Copy” or “Print / save PDF”.</div>') +
+    (smtpReady ? '' : '<div class="sent-note">“Send to customer” emails from <b>your own</b> mailbox once you <b>sign in with Microsoft</b>. Until then, use “Copy” or “Print / save PDF”.</div>') +
     (sendLog ? '<div class="sent-note"><b>Send history</b>' + sendLog + '</div>'
              : (p.sentAt ? '<div class="sent-note">First sent to customer: ' + esc(new Date(p.sentAt).toLocaleString()) + '</div>' : '')) +
     '<div class="sent-note">Steps 1–3 (objective, coordination, responsibilities) are filled in by you. Equipment (step 4) is pre-loaded from your <a href="#templates">Standard equipment</a> list and edited per job. The procedure steps (step 5) use the standard template with this job’s WLL / answers.</div>' +
@@ -1579,31 +1588,6 @@ function renderSettings() {
       '</div>' +
     '</div>' +
 
-    '<div class="panel"><h2>Email sending <span class="muted" style="font-weight:400;font-size:13px">(optional)</span></h2>' +
-      '<div class="banner" style="background:#e0ecf5;border:1px solid #b9d4ea;color:#0b5e8a;margin-bottom:10px">✅ <b>Recommended: connect Microsoft 365</b> (in the <b>SharePoint</b> section below). It sends email <b>as you, via Microsoft Graph</b> — no SMTP, no app password, and it isn’t affected by the tenant SMTP block. SMTP here is just a fallback.</div>' +
-      '<p class="hint">Lets the app email the planning questions itself when you press <b>Send now</b> on a job — straight to the contacts on file, no Outlook window. ' +
-      'Without this, the “Open email draft” button still works through your normal email program.<br><br>' +
-      '<b>Microsoft 365 / Outlook:</b> server <b>smtp.office365.com</b>, port <b>587</b>, user = your full email address. Depending on your company’s security policy you may need an ' +
-      '<i>app password</i>, or IT may need to switch on “Authenticated SMTP” for the mailbox. <b>Gmail:</b> smtp.gmail.com, port 587, app password required. ' +
-      'The password is saved only in <b>data/settings.json</b> on this PC.</p>' +
-      '<div class="frow">' +
-        '<div><label>Mail server (SMTP)</label><input id="smtpHost" value="' + esc(s.smtp.host) + '" placeholder="smtp.office365.com"></div>' +
-        '<div style="max-width:110px"><label>Port</label><input id="smtpPort" type="number" value="' + esc(s.smtp.port) + '"></div>' +
-      '</div>' +
-      '<div class="frow">' +
-        '<div><label>User (your email address)</label><input id="smtpUser" value="' + esc(s.smtp.user) + '" placeholder="you@hydro-wates.com" autocomplete="off"></div>' +
-        '<div><label>Password / app password</label><input id="smtpPass" type="password" value="' + esc(s.smtp.pass) + '" autocomplete="off"></div>' +
-      '</div>' +
-      '<div class="frow">' +
-        '<div><label>From name (shown to the customer)</label><input id="smtpFromName" value="' + esc(s.smtp.fromName) + '" placeholder="Hydro-Wates"></div>' +
-        '<div><label>From address (if different from user)</label><input id="smtpFromAddr" value="' + esc(s.smtp.fromAddr) + '" placeholder="optional"></div>' +
-      '</div>' +
-      '<div class="plan-actions">' +
-        '<button class="btn" data-action="smtp-test">Send test email</button>' +
-        '<span class="muted" style="font-size:12.5px;align-self:center">Sends a test message to your own address.</span>' +
-      '</div>' +
-    '</div>' +
-
     '<div class="panel"><h2>Shop Master <span class="muted" style="font-weight:400;font-size:13px">(received-jobs feed for the Invoices page)</span></h2>' +
       '<p class="hint">Read-only connection to Shop Master’s Supabase database. The <b>Invoices</b> page lists your received jobs from here and cross-references Zoho Books to show which are invoiced. ' +
         (s.shopmasterConnected ? '<b style="color:#1d6f37">● Connected</b>' : '<b style="color:#a02626">● Not connected</b>') + '</p>' +
@@ -1725,7 +1709,7 @@ document.addEventListener('click', async (e) => {
       const p = collectProcedure();
       if (!p) { toast('Generate the procedure first.', true); return; }
       const smtpReady = emailReady();
-      if (!smtpReady) { toast('Email sending isn’t set up yet — connect Microsoft 365 in Settings (recommended), or use Copy / Print.', true); return; }
+      if (!smtpReady) { toast('Sign in with Microsoft to send from your own mailbox — or use Copy / Print.', true); return; }
       await saveProcedure(true);
       state.procSendConfirm = { previewed: false };
       renderModal();
@@ -1746,7 +1730,7 @@ document.addEventListener('click', async (e) => {
       const m = buildProcedureEmail(state.procedureDraft, state.detail.job);
       el.disabled = true; el.textContent = 'Sending…';
       try {
-        const r = await api('POST', '/api/job/' + encodeURIComponent(state.open) + '/send', { to, subject: m.subject, html: m.html, body: m.text, kind: 'procedure' });
+        const r = await api('POST', '/api/job/' + encodeURIComponent(state.open) + '/send', { to, subject: m.subject, html: m.html, body: m.text, kind: 'procedure', msToken: msGraphToken });
         state.procSendConfirm = null;
         state.procedureDraft = JSON.parse(JSON.stringify(r.procedure));
         state.detail.procedure = r.procedure;
@@ -1793,14 +1777,14 @@ document.addEventListener('click', async (e) => {
       if (!to.length) { toast('Tick at least one contact (or type an address).', true); return; }
       const smtpReady = emailReady();
       if (!smtpReady) {
-        toast('One-click sending isn’t set up yet — connect Microsoft 365 in Settings (recommended), or use “Open email draft”.', true);
+        toast('Sign in with Microsoft to send from your own mailbox — or use “Open email draft”.', true);
         return;
       }
       await savePlanning(true);
       const m = buildEmail();
       el.disabled = true; el.textContent = 'Sending…';
       try {
-        const r = await api('POST', '/api/job/' + encodeURIComponent(state.open) + '/send', { to, subject: m.subject, body: m.body });
+        const r = await api('POST', '/api/job/' + encodeURIComponent(state.open) + '/send', { to, subject: m.subject, body: m.body, msToken: msGraphToken });
         state.planningDraft = JSON.parse(JSON.stringify(r.planning));
         state.detail.planning = r.planning;
         const row = state.jobs.find(x => x.key === state.open);

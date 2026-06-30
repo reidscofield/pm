@@ -871,18 +871,38 @@ async function graphSendMail(s, mail) {
 }
 
 // Pick the send method: Microsoft Graph if M365 is connected (preferred), else SMTP fallback.
-async function sendMail(s, mail) {
-  const msReady = !!(s.ms && s.ms.refreshToken);
-  const smtpReady = !!(s.smtp && s.smtp.host && s.smtp.user && s.smtp.pass);
-  if (msReady) {
-    try { return await graphSendMail(s, mail); }
-    catch (e) {
-      if (smtpReady) return await sendSmtpMail(s.smtp, mail);   // graceful fallback to SMTP
-      throw e;
-    }
-  }
-  if (smtpReady) return await sendSmtpMail(s.smtp, mail);
-  throw new Error('No email method is set up — connect Microsoft 365 (recommended) in Settings, or fill in SMTP under Settings → Email sending.');
+// Send as a SPECIFIC person, using THEIR own Microsoft access token (obtained when
+// they signed in with Microsoft). The email leaves from — and lands in the Sent
+// Items of — that person's mailbox, never a shared account.
+async function graphSendMailAsUser(accessToken, mail) {
+  const isHtml = !!mail.html;
+  const payload = {
+    message: {
+      subject: String(mail.subject || ''),
+      body: { contentType: isHtml ? 'HTML' : 'Text', content: String(mail.html || mail.body || '') },
+      toRecipients: (mail.to || []).map(a => ({ emailAddress: { address: String(a) } }))
+    },
+    saveToSentItems: true
+  };
+  const r = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (r.status === 202) return true;
+  const j = await r.json().catch(() => ({}));
+  const msg = (j.error && (j.error.message || j.error.code)) || ('HTTP ' + r.status);
+  throw new Error('Microsoft 365 couldn’t send the email: ' + msg +
+    (r.status === 401 ? ' — your Microsoft sign-in expired; sign out and back in with Microsoft.'
+     : r.status === 403 ? ' — your account is missing the Mail.Send permission.' : ''));
+}
+
+// Email goes out as the LOGGED-IN user via their own Microsoft token. No shared
+// account: if the person didn't sign in with Microsoft there's no mailbox to send
+// from, so we ask them to — nothing is ever sent from someone else's address.
+async function sendMail(s, mail, userToken) {
+  if (userToken) return await graphSendMailAsUser(userToken, mail);
+  throw new Error('To send from your own mailbox, sign in with Microsoft first (then try again).');
 }
 
 function fieldToText(v) {
@@ -1202,14 +1222,13 @@ async function handleApi(req, res, u) {
     const local = readJson(FILES.jobs, {});
     const cache = readJson(FILES.cache, { jobs: {}, lastSync: null });
     const demo = effectiveDemo(s);
-    const zohoBlocks = currentJobs(s).concat(openLeadJobs(s));
-    // Add Shop Master received jobs that AREN'T already on the dashboard via Zoho
-    // (dedupe by HWI), so awaiting jobs like HWI-26-019 get a card too.
-    const present = new Set(zohoBlocks.map(b => extractHwi(b)).filter(Boolean));
-    const received = demo ? [] : (await receivedDashJobs(s)).filter(b => !present.has(extractHwi(b)));
+    // Dashboard sources: the SharePoint Lead List + Zoho Books ONLY. Shop Master is
+    // not used here (it's the Invoices page's received-jobs feed) — the Lead List and
+    // Zoho carry everything the dashboard needs.
+    const allBlocks = currentJobs(s).concat(openLeadJobs(s));
     const idx = leadIndex(cache);
-    const invoicedHwis = invoicedHwisFrom(zohoBlocks);
-    const mapped = zohoBlocks.concat(received).map(b => {
+    const invoicedHwis = invoicedHwisFrom(allBlocks);
+    const mapped = allBlocks.map(b => {
       const r = resolveJob(b, local, s, idx);
       const l = local[b.key] || {};
       const done = completedState(b, l, r.hwi, invoicedHwis, idx);
@@ -1287,7 +1306,7 @@ async function handleApi(req, res, u) {
       const html = body.html ? String(body.html) : '';
       if (!text.trim() && !html.trim()) return bad(res, 400, 'The email body is empty.');
       try {
-        await sendMail(s, { to, subject, body: text, html: html || undefined });
+        await sendMail(s, { to, subject, body: text, html: html || undefined }, body.msToken);
       } catch (e) { return bad(res, 502, String(e.message || e)); }
       const now = new Date().toISOString();
       if (kind === 'procedure') {
