@@ -1202,6 +1202,62 @@ async function verifyUser(token) {
   return user;
 }
 
+// ---- Shop Master loadout -> procedure equipment -------------------------------
+// Clean the WLL unit — Shop Master syncs it from SharePoint, so it can arrive as a
+// nested "expanded reference" blob; pull out the readable unit and normalize it.
+function cleanWllUnit(u) {
+  const s = String(u == null ? '' : u);
+  if (/pound|\blbs?\b/i.test(s)) return 'lb';
+  if (/metric ton|tonne|\bte\b/i.test(s)) return 't';
+  const clean = s.replace(/[{}"@]/g, '').trim();
+  return (clean && clean.length <= 12 && !/odata|reference|sharepoint|value|id\s*:/i.test(clean)) ? clean : '';
+}
+function fmtEquipLine(e) {
+  const wll = (e.wll != null && e.wll !== '') ? ' (WLL ' + Number(e.wll).toLocaleString() + (e.wllUnit ? ' ' + e.wllUnit : '') + ')' : '';
+  const ser = e.serials.length ? ' — ' + e.serials.join(', ') : '';
+  return e.qty + '× ' + e.name + wll + ser;
+}
+// Read a job's ACTUAL equipment from Shop Master's loadout, matched by HWI:
+// loadout header -> line items -> inventory record (name + WLL). Aggregated per
+// item, with serials collected. Read-only.
+async function shopmasterLoadoutEquipment(s, hwi) {
+  const H = String(hwi || '').trim();
+  if (!H) return { found: false };
+  const los = await shopmasterGet(s, 'shopmaster_loadouts?select=id,mobilization_number,job_number,phase,approved_at,shipped_at,created_at&job_number=eq.' + encodeURIComponent(H) + '&order=created_at.desc');
+  if (!Array.isArray(los) || !los.length) return { found: false };
+  const byItem = new Map();
+  let pieces = 0;
+  for (const lo of los) {
+    let items;
+    try { items = await shopmasterGet(s, 'shopmaster_loadout_items?select=quantity,assembly_serial_number,shopmaster_inventory_items(description,working_load_limit,wll_unit)&loadout_id=eq.' + lo.id); }
+    catch (e) { continue; }
+    if (!Array.isArray(items)) continue;
+    for (const it of items) {
+      const inv = it.shopmaster_inventory_items || {};
+      const name = String(inv.description || '').trim() || 'Unnamed item';
+      const wll = (inv.working_load_limit != null && inv.working_load_limit !== '') ? inv.working_load_limit : null;
+      const wllUnit = cleanWllUnit(inv.wll_unit);
+      const qty = Number(it.quantity) || 1;
+      const key = name.toLowerCase();                       // merge case variants of the same item
+      let e = byItem.get(key);
+      if (!e) { e = { name, wll, wllUnit, qty: 0, serials: [] }; byItem.set(key, e); }
+      e.qty += qty; pieces += qty;
+      if (e.wll == null && wll != null) { e.wll = wll; e.wllUnit = wllUnit; }   // adopt a WLL if this row has one
+      const sn = String(it.assembly_serial_number || '').trim();
+      // real serials only — bulk items store their own name in that field
+      if (sn && sn !== '-' && sn.toLowerCase() !== name.toLowerCase() && !e.serials.includes(sn)) e.serials.push(sn);
+    }
+  }
+  const items = [...byItem.values()].sort((a, b) => (b.qty - a.qty) || a.name.localeCompare(b.name));
+  const top = los[0];
+  return {
+    found: items.length > 0,
+    source: { hwi: H, loadoutRef: top.mobilization_number || top.job_number || H, phase: top.phase || '', at: top.approved_at || top.shipped_at || top.created_at || '', pieces, shipments: los.length },
+    items,
+    lines: items.map(fmtEquipLine)
+  };
+}
+
 async function handleApi(req, res, u) {
   const p = u.pathname;
   const method = req.method;
@@ -1271,7 +1327,7 @@ async function handleApi(req, res, u) {
   // ---- single job + local edits
   if (p.startsWith('/api/job/')) {
     const rest = decodeURIComponent(p.slice('/api/job/'.length));
-    const m2 = rest.match(/^(.*)\/(planning|procedure|contacts|send)$/);
+    const m2 = rest.match(/^(.*)\/(planning|procedure|contacts|send|loadout-equipment)$/);
     const key = m2 ? m2[1] : rest;
     const sub = m2 ? m2[2] : '';
     const s = getSettings();
@@ -1288,6 +1344,18 @@ async function handleApi(req, res, u) {
       try {
         return ok(res, { contacts: await contactsForCustomer(b.customerId) });
       } catch (e) { return bad(res, 502, String(e.message || e)); }
+    }
+
+    // The job's real equipment from its Shop Master loadout (by HWI) — used to
+    // auto-fill the procedure's Equipment section.
+    if (sub === 'loadout-equipment' && method === 'GET') {
+      const b = currentJobs(s).find(j => j.key === key) ||
+        (key.startsWith('lead:') ? openLeadJobs(s).find(j => j.key === key) : null);
+      if (!b) return bad(res, 404, 'Job not found');
+      const hwi = extractHwi(b);
+      if (!hwi) return ok(res, { found: false, reason: 'no-hwi' });
+      try { return ok(res, await shopmasterLoadoutEquipment(s, hwi)); }
+      catch (e) { return bad(res, e.code === 'NOT_CONNECTED' ? 409 : 502, String(e.message || e)); }
     }
 
     if (sub === 'send' && method === 'POST') {
@@ -1367,6 +1435,8 @@ async function handleApi(req, res, u) {
         coordination: str(body.coordination, prev.coordination),
         responsibilities: arr(body.responsibilities, prev.responsibilities),
         equipment: arr(body.equipment, prev.equipment),
+        equipmentSource: (body.equipmentSource !== undefined ? body.equipmentSource : prev.equipmentSource) || null,
+        ppe: arr(body.ppe, prev.ppe),
         preJob: str(body.preJob, prev.preJob),
         setupSteps: arr(body.setupSteps, prev.setupSteps),
         executionSteps: arr(body.executionSteps, prev.executionSteps),

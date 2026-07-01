@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-06-29 · 31';
+const BUILD = 'build 2026-07-01 · 36';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -757,6 +757,37 @@ const PROC_PREJOB =
 const PROC_LOGGING =
   'Record all relevant data, including fill times, static hold duration, and any observations. Maintain manual notes as a backup in the ' +
   'event of electronic data loss (dongle error).';
+// The PPE checklist shown on every procedure. Tick what applies per job; add options here.
+const PPE_OPTIONS = [
+  'Hard hat',
+  'Safety glasses',
+  'Steel-toe safety boots',
+  'High-visibility vest',
+  'Gloves',
+  'Hearing protection',
+  'Fall-arrest harness',
+  'FR coveralls',
+  'Respirator / dust mask'
+];
+// Ticked by default on a new procedure (the rest are one click away in the checklist).
+const PROC_PPE = ['Hard hat', 'Safety glasses', 'Steel-toe safety boots'];
+
+// Render the PPE picker: each standard option as a checkbox (ticked if already on the
+// procedure), plus a small "Other" box for anything custom not in the standard list.
+function ppeChecklistHtml(p) {
+  // Tick the standard defaults until this procedure has its own PPE selection
+  // (so older procedures that predate the checklist still show sensible defaults).
+  const sel = (Array.isArray(p.ppe) && p.ppe.length) ? p.ppe : PROC_PPE.slice();
+  const boxes = PPE_OPTIONS.map(o =>
+    '<label class="chk ppe-opt"><input type="checkbox" data-ppe value="' + esc(o) + '"' +
+    (sel.includes(o) ? ' checked' : '') + '> ' + esc(o) + '</label>'
+  ).join('');
+  const extra = sel.filter(x => !PPE_OPTIONS.includes(x));
+  return '<div class="ppe-grid">' + boxes + '</div>' +
+    '<label class="ppe-other-lbl">Other <span class="muted">(one per line)</span></label>' +
+    '<textarea id="procPPEOther" rows="' + Math.max(1, extra.length) +
+      '" placeholder="Any PPE not in the list above">' + esc(extra.join('\n')) + '</textarea>';
+}
 
 // Read a structured planning answer by question id (drives the procedure cascade).
 function planAns(planning, id) {
@@ -790,6 +821,7 @@ function generateProcedure(j, planning) {
     coordination: '',
     responsibilities: [],
     equipment: ((state.templates && state.templates.equipment) || []).slice(),
+    ppe: ((state.templates && state.templates.ppe) || PROC_PPE).slice(),
     preJob: PROC_PREJOB,
     setupSteps: [
       'Mark the test area with red danger tape.',
@@ -892,6 +924,16 @@ function procSendConfirmHtml(d) {
   '</div>';
 }
 
+// The little source tag above the equipment list — shows where the list came from.
+function equipmentSourceHtml(p) {
+  const src = p && p.equipmentSource;
+  if (!src) return '';
+  const when = src.at ? fmtDate(src.at) : '';
+  return '<div class="equip-source">🚛 From <b>' + esc(src.loadoutRef || src.hwi || '') + '</b> loadout · ' +
+    esc(String(src.pieces || 0)) + ' pieces' +
+    (src.phase ? ' · ' + esc(src.phase) : '') + (when ? ' · ' + esc(when) : '') + '</div>';
+}
+
 function procedureTabHtml(d) {
   const p = state.procedureDraft;
   if (!p) {
@@ -920,11 +962,16 @@ function procedureTabHtml(d) {
     '<label style="margin-top:8px">1. Objective</label>' + ta('procObjective', p.objective, 2) +
     '<label style="margin-top:8px">2. Field coordination notes <span class="muted">(one per line)</span></label>' + ta('procCoordination', p.coordination, 3) +
     '<label style="margin-top:8px">3. Responsibilities <span class="muted">(pick a staff member, or type)</span></label>' + respRowsHtml(p) +
-    '<label style="margin-top:8px">4. Equipment &amp; materials <span class="muted">(one per line — pre-loaded from your standard list; edit per job)</span></label>' + ta('procEquip', lines(p.equipment), rowsFor(p.equipment), 'Add equipment items, one per line') +
-    '<label style="margin-top:8px">5.1 Pre-job preparation</label>' + ta('procPreJob', p.preJob, 6) +
-    '<label style="margin-top:8px">5.2 Test setup steps <span class="muted">(one per line)</span></label>' + ta('procSetup', lines(p.setupSteps), rowsFor(p.setupSteps)) +
-    '<label style="margin-top:8px">5.3 Load test execution steps <span class="muted">(one per line)</span></label>' + ta('procExec', lines(p.executionSteps), rowsFor(p.executionSteps)) +
-    '<label style="margin-top:8px">5.4 Information logging</label>' + ta('procLogging', p.logging, 3) +
+    '<label style="margin-top:8px">4. Equipment &amp; materials</label>' +
+    equipmentSourceHtml(p) +
+    '<div class="equip-pull"><button class="btn small" data-action="proc-pull-equipment">↻ Pull from Shop Master</button>' +
+      '<span class="muted" style="font-size:12px">' + (p.equipmentSource ? 'Live from the job’s loadout — edit any line.' : 'One per line — from your standard list; edit per job.') + '</span></div>' +
+    ta('procEquip', lines(p.equipment), rowsFor(p.equipment), 'Add equipment items, one per line') +
+    '<label style="margin-top:8px">5. Required PPE <span class="muted">(tick all that apply)</span></label>' + ppeChecklistHtml(p) +
+    '<label style="margin-top:8px">6.1 Pre-job preparation</label>' + ta('procPreJob', p.preJob, 6) +
+    '<label style="margin-top:8px">6.2 Test setup steps <span class="muted">(one per line)</span></label>' + ta('procSetup', lines(p.setupSteps), rowsFor(p.setupSteps)) +
+    '<label style="margin-top:8px">6.3 Load test execution steps <span class="muted">(one per line)</span></label>' + ta('procExec', lines(p.executionSteps), rowsFor(p.executionSteps)) +
+    '<label style="margin-top:8px">6.4 Information logging</label>' + ta('procLogging', p.logging, 3) +
     '<div class="frow" style="margin-top:8px">' +
       '<div><label>Approved by</label><input id="procApprovedBy" value="' + esc(p.approvedBy || '') + '"></div>' +
       '<div><label>Approval date</label><input id="procApprovedDate" value="' + esc(p.approvedDate || '') + '"></div>' +
@@ -940,7 +987,7 @@ function procedureTabHtml(d) {
     (smtpReady ? '' : '<div class="sent-note">“Send to customer” emails from <b>your own</b> mailbox once you <b>sign in with Microsoft</b>. Until then, use “Copy” or “Print / save PDF”.</div>') +
     (sendLog ? '<div class="sent-note"><b>Send history</b>' + sendLog + '</div>'
              : (p.sentAt ? '<div class="sent-note">First sent to customer: ' + esc(new Date(p.sentAt).toLocaleString()) + '</div>' : '')) +
-    '<div class="sent-note">Steps 1–3 (objective, coordination, responsibilities) are filled in by you. Equipment (step 4) is pre-loaded from your <a href="#templates">Standard equipment</a> list and edited per job. The procedure steps (step 5) use the standard template with this job’s WLL / answers.</div>' +
+    '<div class="sent-note">Steps 1–3 (objective, coordination, responsibilities) are filled in by you. Equipment (step 4) auto-fills from the job’s <b>Shop Master loadout</b> (or your <a href="#templates">Standard equipment</a> list). Tick the PPE for the job (step 5); the procedure steps (step 6) come from the standard template with this job’s WLL / answers — edit any of it.</div>' +
   '</div>';
 }
 
@@ -958,6 +1005,7 @@ function collectProcedure() {
     return [g('[data-rname]'), g('[data-rcompany]'), g('[data-rrole]'), g('[data-rcontact]')].join(' | ');
   }).filter(s => s.replace(/\|/g, '').trim());
   p.equipment = ls('procEquip');
+  p.ppe = $$('[data-ppe]').filter(b => b.checked).map(b => b.value).concat(ls('procPPEOther'));
   p.preJob = v('procPreJob'); p.setupSteps = ls('procSetup'); p.executionSteps = ls('procExec');
   p.logging = v('procLogging'); p.approvedBy = v('procApprovedBy'); p.approvedDate = v('procApprovedDate');
   if ($('#procEmail')) p.email = $('#procEmail').value.trim();
@@ -975,6 +1023,29 @@ async function saveProcedure(silent) {
     state.detail.procedure = r.procedure;
     if (!silent) toast('Procedure saved.');
   } catch (e) { toast(e.message, true); }
+}
+
+// Pull the Equipment section straight from this job's Shop Master loadout (by HWI).
+// Called automatically after "Generate" (onGenerate) and by the "Pull from Shop
+// Master" button (manual). Won't silently clobber edits on a manual re-pull.
+async function pullLoadoutEquipment(key, opts) {
+  opts = opts || {};
+  if (opts.manual && state.procedureDraft && (state.procedureDraft.equipment || []).length &&
+      !confirm('Replace the equipment list with this job’s Shop Master loadout?')) return;
+  let r;
+  try { r = await api('GET', '/api/job/' + encodeURIComponent(key) + '/loadout-equipment'); }
+  catch (e) { if (opts.manual) toast(e.message, true); return; }
+  if (!state.procedureDraft || state.open !== key) return;
+  if (r && r.found && Array.isArray(r.lines) && r.lines.length) {
+    if ($('#procEquip')) collectProcedure();          // keep any other in-progress edits
+    state.procedureDraft.equipment = r.lines;
+    state.procedureDraft.equipmentSource = r.source;
+    renderModal();                                    // form now shows the pulled list
+    await saveProcedure(true);
+    toast('Pulled ' + r.source.pieces + ' pieces from ' + r.source.hwi + '’s Shop Master loadout');
+  } else if (opts.manual) {
+    toast('No Shop Master loadout for this job yet — pull again once it’s been loaded.', false);
+  }
 }
 
 // Render the full procedure as a printable / PDF document on the Hydro-Wates letterhead.
@@ -1016,12 +1087,13 @@ function printProcedure(preview) {
     '<h2>2. Field coordination notes</h2>' + bullets(p.coordination) +
     '<h2>3. Responsibilities</h2><table><tr><th>Name</th><th>Company</th><th>Responsibilities</th><th>Contact</th></tr>' + respRows + '</table>' +
     '<h2>4. Equipment &amp; materials</h2>' + equip +
-    '<h2>5. Procedure</h2>' +
-    '<h3>5.1 Pre-job preparation</h3>' + para(p.preJob) +
-    '<h3>5.2 Test setup — 100% function test &amp; 125% overload</h3>' + steps(p.setupSteps) +
-    '<h3>5.3 Load test execution</h3>' + steps(p.executionSteps) +
-    '<h3>5.4 Information logging</h3>' + para(p.logging) +
-    '<h2>6. Project drawings</h2><p class="muted">[ Attach rigging drawing ]</p>' +
+    '<h2>5. Required PPE</h2>' + ((p.ppe || []).length ? steps(p.ppe) : '<p class="muted">[ PPE to be confirmed ]</p>') +
+    '<h2>6. Procedure</h2>' +
+    '<h3>6.1 Pre-job preparation</h3>' + para(p.preJob) +
+    '<h3>6.2 Test setup — 100% function test &amp; 125% overload</h3>' + steps(p.setupSteps) +
+    '<h3>6.3 Load test execution</h3>' + steps(p.executionSteps) +
+    '<h3>6.4 Information logging</h3>' + para(p.logging) +
+    '<h2>7. Project drawings</h2><p class="muted">[ Attach rigging drawing ]</p>' +
     '<div class="appr"><div><b>Approved:</b> ' + esc(p.approvedBy || '________________') + '</div><div><b>Date:</b> ' + esc(p.approvedDate || '____________') + '</div></div>' +
     '<p class="foot">Hydro-Wates Project Manager · ' + esc(new Date().toLocaleString()) + '</p>' +
     '</body></html>';
@@ -1055,11 +1127,13 @@ function procedureText(p, j) {
   (p.responsibilities || []).forEach(line => { const c = line.split('|').map(s => s.trim()); L.push([c[0], c[1], c[2], c[3]].filter(Boolean).join(' — ')); });
   L.push('', '4. EQUIPMENT & MATERIALS');
   if ((p.equipment || []).length) p.equipment.forEach((e, i) => L.push((i + 1) + '. ' + e)); else L.push('To be confirmed.');
-  L.push('', '5. PROCEDURE', '5.1 Pre-job preparation', p.preJob || '', '', '5.2 Test setup');
+  L.push('', '5. REQUIRED PPE');
+  if ((p.ppe || []).length) p.ppe.forEach(e => L.push('- ' + e)); else L.push('To be confirmed.');
+  L.push('', '6. PROCEDURE', '6.1 Pre-job preparation', p.preJob || '', '', '6.2 Test setup');
   (p.setupSteps || []).forEach((s, i) => L.push((i + 1) + '. ' + s));
-  L.push('', '5.3 Load test execution');
+  L.push('', '6.3 Load test execution');
   (p.executionSteps || []).forEach((s, i) => L.push((i + 1) + '. ' + s));
-  L.push('', '5.4 Information logging', p.logging || '');
+  L.push('', '6.4 Information logging', p.logging || '');
   if (p.approvedBy || p.approvedDate) L.push('', 'Approved: ' + (p.approvedBy || '') + '   Date: ' + (p.approvedDate || ''));
   return L.join('\n');
 }
@@ -1087,11 +1161,12 @@ function procedureHtml(p, j) {
     '<h2 ' + h2 + '>2. Field coordination notes</h2>' + bullets(p.coordination) +
     '<h2 ' + h2 + '>3. Responsibilities</h2><table style="border-collapse:collapse;width:100%;font-size:13px"><tr><th ' + th + '>Name</th><th ' + th + '>Company</th><th ' + th + '>Responsibilities</th><th ' + th + '>Contact</th></tr>' + respRows + '</table>' +
     '<h2 ' + h2 + '>4. Equipment &amp; materials</h2>' + equip +
-    '<h2 ' + h2 + '>5. Procedure</h2>' +
-    '<h3 ' + h3 + '>5.1 Pre-job preparation</h3>' + para(p.preJob) +
-    '<h3 ' + h3 + '>5.2 Test setup</h3>' + steps(p.setupSteps) +
-    '<h3 ' + h3 + '>5.3 Load test execution</h3>' + steps(p.executionSteps) +
-    '<h3 ' + h3 + '>5.4 Information logging</h3>' + para(p.logging) +
+    '<h2 ' + h2 + '>5. Required PPE</h2>' + ((p.ppe || []).length ? steps(p.ppe) : '<p style="color:#888">To be confirmed.</p>') +
+    '<h2 ' + h2 + '>6. Procedure</h2>' +
+    '<h3 ' + h3 + '>6.1 Pre-job preparation</h3>' + para(p.preJob) +
+    '<h3 ' + h3 + '>6.2 Test setup</h3>' + steps(p.setupSteps) +
+    '<h3 ' + h3 + '>6.3 Load test execution</h3>' + steps(p.executionSteps) +
+    '<h3 ' + h3 + '>6.4 Information logging</h3>' + para(p.logging) +
     ((p.approvedBy || p.approvedDate) ? '<p style="margin-top:18px;border-top:1px solid #e9eef2;padding-top:8px"><b>Approved:</b> ' + esc(p.approvedBy || '') + ' &nbsp; <b>Date:</b> ' + esc(p.approvedDate || '') + '</p>' : '') +
   '</div>';
 }
@@ -1690,8 +1765,10 @@ document.addEventListener('click', async (e) => {
       await saveProcedure(true);
       renderModal();
       toast('Draft procedure generated — edit freely, then print.');
+      pullLoadoutEquipment(state.open, { onGenerate: true });   // auto-fill equipment from Shop Master if a loadout exists
       return;
     }
+    case 'proc-pull-equipment': pullLoadoutEquipment(state.open, { manual: true }); return;
     case 'proc-save': await saveProcedure(); return;
     case 'proc-print': collectProcedure(); printProcedure(); return;
     case 'proc-preview': collectProcedure(); printProcedure(true); return;
