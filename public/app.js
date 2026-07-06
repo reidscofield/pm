@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-01 · 38';
+const BUILD = 'build 2026-07-01 · 41';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -387,6 +387,9 @@ async function openJob(key) {
     state.planningDraft = d.planning ? JSON.parse(JSON.stringify(d.planning)) : null;
     if (state.planningDraft && !state.planningDraft.email) state.planningDraft.email = d.job.email || '';
     state.procedureDraft = d.procedure ? JSON.parse(JSON.stringify(d.procedure)) : null;
+    state.procedureSetup = (state.procedureDraft && state.procedureDraft.setup)
+      ? Object.assign(defaultSetup(d.job, d.planning), state.procedureDraft.setup)
+      : defaultSetup(d.job, d.planning);
     state.procSendConfirm = null;
     state.modalTab = (d.planning && d.planning.status !== 'none') ? 'planning' : 'details';
     state.contacts = null; state.contactsError = '';
@@ -818,6 +821,44 @@ function drawingsTabHtml(p) {
   '</div>';
 }
 
+// Site photos attached to the procedure. Thumbnails need a signed URL (server adds
+// `url` to each on load / upload); clicking a thumb opens the full-size image.
+function photosTabHtml(p) {
+  const list = (p && p.photos) || [];
+  const thumbs = list.map(ph =>
+    '<div class="photo-thumb" data-action="photo-view" data-id="' + esc(ph.id) + '" title="' + esc(ph.name) + '">' +
+      (ph.url ? '<img src="' + esc(ph.url) + '" alt="' + esc(ph.name) + '">' : '<div class="photo-broken">image</div>') +
+      '<button type="button" class="photo-x" data-action="photo-remove" data-id="' + esc(ph.id) + '" title="Remove">✕</button>' +
+    '</div>'
+  ).join('');
+  return '<div class="photo-box">' +
+    (thumbs ? '<div class="photo-grid">' + thumbs + '</div>' : '<div class="muted" style="font-size:13px;padding:2px 0 6px">No photos attached yet.</div>') +
+    '<div class="photo-add">' +
+      '<label class="btn small">➕ Add photo' +
+        '<input type="file" accept="image/*" data-change="photo-file" style="display:none"></label>' +
+      '<span class="muted" style="font-size:12px">JPG/PNG — resized automatically to keep it small.</span>' +
+    '</div>' +
+  '</div>';
+}
+// Downscale + re-encode an image in the browser so uploads (and storage) stay small.
+function downscaleImage(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+      const scale = Math.min(1, maxDim / Math.max(w, h));
+      w = Math.max(1, Math.round(w * scale)); h = Math.max(1, Math.round(h * scale));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      c.toBlob(b => b ? resolve(b) : reject(new Error('Could not process that image.')), 'image/jpeg', quality || 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image.')); };
+    img.src = url;
+  });
+}
+
 // Read a structured planning answer by question id (drives the procedure cascade).
 function planAns(planning, id) {
   if (!planning || !planning.questions) return '';
@@ -826,42 +867,97 @@ function planAns(planning, id) {
 }
 
 // Build a full draft procedure from the job + its WLL/test load + planning answers + standard boilerplate.
-function generateProcedure(j, planning) {
+const JOB_TYPES = [['waterbags', '💧 Water bags'], ['steelweights', '🏋 Steel weights'], ['padeye', '⚓ Pad eye testing']];
+
+// The answers that drive procedure generation. Pre-fills a couple of fields from the
+// planning answers when they exist.
+function defaultSetup(j, planning) {
+  const q4 = (planning && planning.questions) ? planning.questions.find(x => x.id === 'q4') : null;
+  const dist = q4 && q4.value != null ? String(q4.value).trim() : '';
+  const q7 = planAns(planning, 'q7');
+  return {
+    jobType: 'waterbags',
+    testPct: '125',          // % of WLL to test to (100 for a proof-to-100% job, etc.)
+    testLoad: '',            // blank = auto (WLL × testPct)
+    functionTest: q7 ? q7 === 'yes' : true,
+    staticHold: true,
+    holdMinutes: '10',
+    bagCount: '', bagSize: '',
+    waterSource: '', waterDistance: dist,
+    weightConfig: '', landingArea: '',
+    padEyeCount: '', pullDirection: '', tester: '', ramArea: ''
+  };
+}
+
+// Deterministic, no-AI procedure builder: branches on the job type from the setup
+// answers and assembles the objective, equipment, and steps. Same answers -> same doc.
+function generateProcedure(j, planning, setup) {
+  setup = setup || defaultSetup(j, planning);
   const shortTons = /short/i.test(planAns(planning, 'q2'));
   const unitWord = shortTons ? 'short tons' : 'metric tons';
   const factor = shortTons ? 2000 : 2204.62;
   const wll = (j.wll != null && j.wll !== '') ? Number(j.wll) : null;
-  const wllUnit = j.wllUnit || 't';
-  const testLoad = wll != null ? +(wll * 1.25).toFixed(3) : null;
+  const pctRaw = (setup.testPct != null && String(setup.testPct).trim() !== '') ? Number(setup.testPct) : 125;
+  const pct = isNaN(pctRaw) ? 125 : pctRaw;
+  const ov = (setup.testLoad != null && String(setup.testLoad).trim() !== '') ? Number(setup.testLoad) : null;
+  const testLoad = (ov != null && !isNaN(ov)) ? ov : (wll != null ? +(wll * pct / 100).toFixed(3) : null);
   const lbs = n => Math.round(n).toLocaleString();
-  const distQ = (planning && planning.questions) ? planning.questions.find(x => x.id === 'q4') : null;
-  const distVal = distQ && distQ.value != null ? String(distQ.value).trim() : '';
-  const distStr = distVal ? distVal + ' ' + (distQ.unit || 'ft') : '';
-  const fnTest = planAns(planning, 'q7') === 'yes';
-  const cust = j.customer || 'the customer';
-
+  const pctWord = pct + '%';
+  const loadWord = testLoad != null ? (testLoad + ' ' + unitWord + ' (' + lbs(testLoad * factor) + ' lbs, ' + pctWord + ' WLL)') : (pctWord + ' of WLL');
+  const holdMin = String(setup.holdMinutes || '').trim();
+  const x = {
+    wll: wll, testLoad: testLoad, unitWord: unitWord, factor: factor, lbs: lbs, loadWord: loadWord, pctWord: pctWord,
+    fnTest: !!setup.functionTest,
+    cust: j.customer || 'the customer',
+    holdStr: setup.staticHold
+      ? ('Hold the test load' + (holdMin ? ' for ' + holdMin + ' minutes' : ' for the required duration') + ' as a static proof hold, monitoring for any movement, slippage, or deformation.')
+      : null
+  };
+  const t = setup.jobType || 'waterbags';
+  const build = t === 'steelweights' ? genSteelWeights(j, setup, x)
+              : t === 'padeye' ? genPadEye(j, setup, x)
+              : genWaterBags(j, setup, x);
   return {
     status: 'draft',
     startDate: j.date ? fmtDate(j.date) : '',
     scope: '',
     jobSite: '',
     projectRef: j.number || '',
-    objective: '',
+    objective: build.objective,
     coordination: '',
     responsibilities: [],
-    equipment: ((state.templates && state.templates.equipment) || []).slice(),
+    equipment: build.equipment,
     ppe: ((state.templates && state.templates.ppe) || PROC_PPE).slice(),
     preJob: PROC_PREJOB,
+    setupSteps: build.setupSteps,
+    executionSteps: build.executionSteps,
+    logging: PROC_LOGGING,
+    setup: Object.assign({}, setup),
+    approvedBy: '',
+    approvedDate: ''
+  };
+}
+
+function genWaterBags(j, s, x) {
+  const n = String(s.bagCount || '').trim(), size = String(s.bagSize || '').trim();
+  const bagDesc = (n ? n + ' × ' : '') + (size ? size + ' ' : '') + 'water-weight bag' + ((n && Number(n) === 1) ? '' : 's');
+  const src = String(s.waterSource || '').trim();
+  const dist = String(s.waterDistance || '').trim();
+  const distStr = dist ? (/[a-z]/i.test(dist) ? dist : dist + ' ft') : '';
+  const srcStr = (src || 'the water source') + (distStr ? ' (' + distStr + ' away)' : '');
+  return {
+    objective: 'Perform a proof load test to ' + x.loadWord + ' using ' + bagDesc + '.',
+    equipment: ((state.templates && state.templates.equipment) || []).slice(),
     setupSteps: [
-      'Mark the test area with red danger tape.',
-      'Position water bag under the hook.',
-      'Unroll the bag and connect ball valve to drain trunk.',
-      'Unroll and stage fill hoses to the water source.',
+      'Mark the test area with red danger tape and establish an exclusion zone.',
+      'Position the water bag(s) under the hook.',
+      'Unroll the bag(s) and connect the ball valve to the drain trunk.',
+      'Unroll and stage fill hoses to ' + srcStr + '.',
       'Unroll and stage drain hoses to the discharge location.',
       'Attach fill hose to the bag’s fill fitting.',
-      'Connect the water source to the fill hoses.' + (distStr ? ' (water source is ' + distStr + ' away)' : ''),
+      'Connect ' + (src || 'the water source') + ' to the fill hoses.',
       'Attach master link to the hook if needed.',
-      'Attach shackles to hook or master link.',
+      'Attach shackles to the hook or master link.',
       'Attach the tared-out load cell to the shackles.',
       'Connect the lower shackle to the large master links on the water bag.',
       'Ensure rigging shackles are properly pinned to master links.',
@@ -871,21 +967,158 @@ function generateProcedure(j, planning) {
     ],
     executionSteps: [
       'Confirm the drain ball valve is closed.',
-      'Turn on the water source and monitor load increase carefully.',
-      wll != null ? 'Fill water bags to a total of ' + wll + ' ' + unitWord + ' (' + lbs(wll * factor) + ' lbs).'
-                  : 'Fill water bags to 100% of WLL.',
-      fnTest ? 'Perform a function test as directed by ' + cust + '.' : null,
-      testLoad != null ? 'Continue filling to ' + testLoad + ' ' + unitWord + ' (' + lbs(testLoad * factor) + ' lbs).'
-                       : 'Continue filling to 125% of WLL.',
+      'Turn on the water source and monitor the load increase carefully.',
+      x.wll != null ? 'Fill water bags to a total of ' + x.wll + ' ' + x.unitWord + ' (' + x.lbs(x.wll * x.factor) + ' lbs).' : 'Fill water bags to 100% of WLL.',
+      x.fnTest ? 'Perform a function test as directed by ' + x.cust + '.' : null,
+      'Continue filling to the test load of ' + x.loadWord + '.',
+      x.holdStr,
       'After completion, connect drain hoses.',
-      'Open the ball valve and drain the bag completely. Monitor the drain location and reduce flow as needed to prevent flooding.',
-      'Once empty, carefully lay water bag down.',
+      'Open the ball valve and drain the bag completely, monitoring the drain location and reducing flow as needed to prevent flooding.',
+      'Once empty, carefully lay the water bag down.',
       'Repeat these steps for each additional unit under test.'
-    ].filter(Boolean),
-    logging: PROC_LOGGING,
-    approvedBy: '',
-    approvedDate: ''
+    ].filter(Boolean)
   };
+}
+
+function genSteelWeights(j, s, x) {
+  const cfg = String(s.weightConfig || '').trim(), landing = String(s.landingArea || '').trim();
+  const tmpl = (state.templates && state.templates.equipment) || [];
+  return {
+    objective: 'Load test the customer’s equipment to ' + x.loadWord + ' using calibrated steel test weights' + (cfg ? ' (' + cfg + ')' : '') + '.',
+    equipment: tmpl.length ? tmpl.slice() : [
+      '(2) 2,000 lb steel plates', '(2) 500 lb steel plates', '(10) 50 lb hand weights',
+      'Test stand', '6.5 Te load cell + OSCAR dongle', '17 Te shackles', '3/4 Te shackles',
+      'Wire rope slings (2 ft, 4 ft)', 'Tool bag'
+    ],
+    setupSteps: [
+      'Conduct the pre-job safety briefing and JSA; confirm all personnel understand their assignments.',
+      'Mark the test area with red danger tape and establish an exclusion zone.',
+      'Confirm the ' + (landing ? landing + ' ' : '') + 'test stand / lay-down area is level and rated for the full test load.',
+      'Stack the required steel plates and hand weights on the test stand to make up the test load' + (cfg ? ' (' + cfg + ')' : '') + '.',
+      'Attach the shackle(s) and rig the wire rope sling(s) to the weights.',
+      'Fit the tared-out load cell in line with the rigging.',
+      'Review all rigging; check shackles are properly pinned and slings are not pinched.'
+    ],
+    executionSteps: [
+      x.fnTest ? 'Perform a function test of the equipment as directed by ' + x.cust + '.' : null,
+      'Have the equipment under test pick up the weights and take the load to ' + x.loadWord + ', monitoring the load cell.',
+      x.holdStr || 'Hold the test load for the required duration.',
+      'Log the start and stop times of the hold.',
+      'Land the weights back down in a controlled manner and de-rig.',
+      'Account for all test weights and record the result.',
+      'Repeat for each additional unit under test — position the required plates/weights, rig, lift, and hold.'
+    ].filter(Boolean)
+  };
+}
+
+function genPadEye(j, s, x) {
+  const cnt = String(s.padEyeCount || '').trim();
+  const dir = String(s.pullDirection || '').trim();
+  const ram = String(s.tester || '').trim() || 'hydraulic ram';
+  const many = cnt && Number(cnt) > 1;
+  const cntWord = cnt ? (cnt + ' lifting lug' + (many ? 's' : '') + ' / pad eye' + (many ? 's' : '')) : 'the lifting lug(s) / pad eye(s)';
+  const area = String(s.ramArea || '').trim();
+  const areaN = area ? Number(area.replace(/[^0-9.]/g, '')) : null;
+  const testLbs = x.testLoad != null ? Math.round(x.testLoad * x.factor) : null;
+  const psiStep = 'Calculate the target PSI for the test load:  PSI = test load (lbs) ÷ ram surface area (in²)' +
+    ((areaN && testLbs) ? '  =  ' + x.lbs(testLbs) + ' ÷ ' + area + '  =  ' + Math.round(testLbs / areaN).toLocaleString() + ' psi.' : '  (enter the ram model / surface area).');
+  const tmpl = (state.templates && state.templates.equipment) || [];
+  return {
+    objective: 'Load test ' + cntWord + ' to a test load of ' + x.loadWord + ' using a hydraulic ram and reaction frame.',
+    equipment: tmpl.length ? tmpl.slice() : [
+      (ram === 'hydraulic ram' ? '30 Te hydraulic ram' : ram),
+      'Threaded pulling mandrel w/ washers & nuts', '(2) reaction pins', 'Hydraulic hoses (10 ft)',
+      'Enerpac hydraulic hand pump w/ oil', 'Slotted I-beam', 'Assorted metal shims', 'Reaction frame',
+      'Shackles (bolt-type + screw-pin, assorted)', '10,000 psi pressure gauge w/ calibration cert', 'Assorted wooden blocks'
+    ],
+    setupSteps: [
+      'Conduct the pre-job safety briefing and JSA; review working at heights, dropped objects, and tag lines.',
+      'Attach the shackle to the lifting lug / pad eye.',
+      'Build the reaction frame around the shackle using the I-beam and metal shims (stack wooden blocks under the I-beam for height if needed).',
+      'Set the ' + ram + ' on top of the I-beam.',
+      'Insert the pulling mandrel through the ram and I-beam.',
+      'Attach the pulling mandrel to the shackle and adjust by tightening the wing nut.',
+      'Attach the hydraulic hose to the hand pump and the ram.',
+      'Attach the calibrated pressure gauge to the hand pump.' + (dir ? ' Confirm the pull direction / angle (' + dir + ') matches the design load direction.' : '')
+    ],
+    executionSteps: [
+      psiStep,
+      'Erect red danger tape and clear the area of all personnel.',
+      'Slowly pump the hand pump until 500 psi.',
+      'A Hydro-Wates representative enters the test area to inspect the apparatus (ensure the clevis is not contacting the underside of the reaction frame), then returns to the safe area outside the barrier.',
+      x.fnTest ? 'Perform a function test as directed by ' + x.cust + '.' : null,
+      'Slowly pump until the target PSI is reached.',
+      x.holdStr || 'Once the target PSI is reached, hold for 2 minutes.',
+      'Bleed off pressure via the bleed-off line on the hand pump; confirm zero pressure and that the system is de-energized.',
+      'Remove the test equipment and note any damage or issues.',
+      'Flag the lug with pink flagging tape for the weld inspector to indicate it has been load tested.',
+      'Complete a field load test report for each lug and collect the customer witness signature.',
+      cnt ? 'Reposition and repeat for each of the ' + cnt + ' lugs.' : 'Reposition and repeat for each additional lug / pad eye.'
+    ].filter(Boolean)
+  };
+}
+
+// The "Procedure setup" question panel — pick the job type, answer the factors, Generate.
+function setupPanelHtml(s, j) {
+  s = s || defaultSetup(j);
+  const wll = (j.wll != null && j.wll !== '') ? Number(j.wll) : null;
+  const pctN = (s.testPct != null && String(s.testPct).trim() !== '' && !isNaN(Number(s.testPct))) ? Number(s.testPct) : 125;
+  const autoTL = wll != null ? (+(wll * pctN / 100).toFixed(3) + ' ' + (j.wllUnit || 't')) : 'set WLL on the Details tab';
+  const fld = (id, val, ph) => '<input id="' + id + '" value="' + esc(val == null ? '' : val) + '" placeholder="' + esc(ph || '') + '">';
+  const radios = JOB_TYPES.map(([v, l]) =>
+    '<label class="setup-type' + (s.jobType === v ? ' on' : '') + '"><input type="radio" name="setupJobType" value="' + v + '" data-change="setup-jobtype"' + (s.jobType === v ? ' checked' : '') + '> ' + l + '</label>'
+  ).join('');
+  let typeFields;
+  if (s.jobType === 'steelweights') {
+    typeFields =
+      '<div class="frow"><div><label>Weights / configuration</label>' + fld('setupWeightConfig', s.weightConfig, 'e.g. 5 × 10 Te plates') + '</div>' +
+      '<div><label>Lift &amp; landing area</label>' + fld('setupLandingArea', s.landingArea, 'e.g. quay apron, level') + '</div></div>';
+  } else if (s.jobType === 'padeye') {
+    typeFields =
+      '<div class="frow"><div><label>Number of lugs / pad eyes</label>' + fld('setupPadCount', s.padEyeCount, 'e.g. 4') + '</div>' +
+      '<div><label>Pull direction / angle</label>' + fld('setupPullDir', s.pullDirection, 'e.g. vertical, 45°') + '</div></div>' +
+      '<div class="frow"><div><label>Ram / tester</label>' + fld('setupTester', s.tester, 'e.g. 30 Te hydraulic ram') + '</div>' +
+      '<div><label>Ram surface area (in²)</label>' + fld('setupRamArea', s.ramArea, 'e.g. 7.22 (RC302) — for PSI') + '</div></div>';
+  } else {
+    typeFields =
+      '<div class="frow"><div><label>Number of bags</label>' + fld('setupBagCount', s.bagCount, 'e.g. 4') + '</div>' +
+      '<div><label>Bag size</label>' + fld('setupBagSize', s.bagSize, 'e.g. 35 Te') + '</div></div>' +
+      '<div class="frow"><div><label>Water source</label>' + fld('setupWaterSource', s.waterSource, 'e.g. quay hydrant') + '</div>' +
+      '<div><label>Distance to fill point</label>' + fld('setupWaterDist', s.waterDistance, 'e.g. 150 ft') + '</div></div>';
+  }
+  return '<div class="setup-box" id="setupPanel">' +
+    '<div class="setup-h">Procedure setup <span class="muted">— answer these, then Generate (no AI — fully deterministic)</span></div>' +
+    '<div class="setup-types">' + radios + '</div>' +
+    '<div class="frow">' +
+      '<div><label>Test as % of WLL</label>' + fld('setupTestPct', s.testPct, '125') + '</div>' +
+      '<div><label>Test load <span class="muted">(override)</span></label>' + fld('setupTestLoad', s.testLoad, 'auto: ' + autoTL) + '</div>' +
+    '</div>' +
+    '<div class="frow">' +
+      '<div><label>Testing</label><div class="setup-toggles">' +
+        '<label class="chk"><input type="checkbox" id="setupFunc"' + (s.functionTest ? ' checked' : '') + '> Function test</label>' +
+        '<label class="chk"><input type="checkbox" id="setupStatic" data-change="setup-static"' + (s.staticHold ? ' checked' : '') + '> Static hold</label>' +
+        (s.staticHold ? '<span class="setup-hold"><input id="setupHold" value="' + esc(s.holdMinutes || '') + '"> min</span>' : '') +
+      '</div></div>' +
+    '</div>' +
+    typeFields +
+    '<button class="btn primary" data-action="proc-generate">' + (state.procedureDraft ? '↻ Regenerate procedure' : 'Generate procedure') + '</button>' +
+  '</div>';
+}
+// Read the setup panel back into state.procedureSetup.
+function collectSetup() {
+  const s = state.procedureSetup || (state.procedureSetup = defaultSetup(state.detail && state.detail.job, state.detail && state.detail.planning));
+  const v = id => { const el = $('#' + id); return el ? el.value.trim() : undefined; };
+  const jt = $$('input[name="setupJobType"]').find(r => r.checked);
+  if (jt) s.jobType = jt.value;
+  const func = $('#setupFunc'); if (func) s.functionTest = func.checked;
+  const stat = $('#setupStatic'); if (stat) s.staticHold = stat.checked;
+  const set = (id, key) => { const val = v(id); if (val !== undefined) s[key] = val; };
+  set('setupTestPct', 'testPct'); set('setupTestLoad', 'testLoad'); set('setupHold', 'holdMinutes');
+  set('setupBagCount', 'bagCount'); set('setupBagSize', 'bagSize');
+  set('setupWaterSource', 'waterSource'); set('setupWaterDist', 'waterDistance');
+  set('setupWeightConfig', 'weightConfig'); set('setupLandingArea', 'landingArea');
+  set('setupPadCount', 'padEyeCount'); set('setupPullDir', 'pullDirection'); set('setupTester', 'tester'); set('setupRamArea', 'ramArea');
+  return s;
 }
 
 // Responsibilities editor: one card per person, with a dropdown of Hydro-Wates staff
@@ -965,10 +1198,10 @@ function equipmentSourceHtml(p) {
 
 function procedureTabHtml(d) {
   const p = state.procedureDraft;
+  if (!state.procedureSetup) state.procedureSetup = (p && p.setup) ? Object.assign(defaultSetup(d.job, d.planning), p.setup) : defaultSetup(d.job, d.planning);
   if (!p) {
-    return '<p class="muted" style="line-height:1.6">No procedure yet for this job.<br>' +
-      'Generate a draft load-test procedure from this job’s answers, WLL and the standard template — then edit any field and print.</p>' +
-      '<button class="btn primary" data-action="proc-generate">Generate draft procedure</button>';
+    return '<p class="muted" style="line-height:1.6;margin-bottom:10px">Pick the job type and answer a few questions, then <b>Generate</b> — it builds a tailored, fully editable draft. No AI; the same answers always produce the same procedure.</p>' +
+      setupPanelHtml(state.procedureSetup, d.job);
   }
   if (state.procSendConfirm) return procSendConfirmHtml(d);
   const ta = (id, val, rows, ph) => '<textarea id="' + id + '" rows="' + rows + '"' + (ph ? ' placeholder="' + esc(ph) + '"' : '') + '>' + esc(val || '') + '</textarea>';
@@ -977,6 +1210,7 @@ function procedureTabHtml(d) {
   const smtpReady = emailReady();
   const sendLog = (p.sentLog || []).slice().reverse().map(l => '<div>' + esc(new Date(l.at).toLocaleString()) + ' → ' + esc((l.to || []).join(', ')) + '</div>').join('');
   return '<div class="proc">' +
+    setupPanelHtml(state.procedureSetup, d.job) +
     '<div class="frow">' +
       '<div><label>Status</label><select id="procStatus">' +
         Object.entries(PROC_STATUS).map(([v, l]) => '<option value="' + v + '"' + (p.status === v ? ' selected' : '') + '>' + l + '</option>').join('') +
@@ -1003,6 +1237,8 @@ function procedureTabHtml(d) {
     '<label style="margin-top:8px">6.4 Information logging</label>' + ta('procLogging', p.logging, 3) +
     '<label style="margin-top:8px">7. Project drawings <span class="muted">(PDF rigging drawings)</span></label>' +
     drawingsTabHtml(p) +
+    '<label style="margin-top:8px">8. Site photos <span class="muted">(JPG/PNG — shown in the printed procedure)</span></label>' +
+    photosTabHtml(p) +
     '<div class="frow" style="margin-top:8px">' +
       '<div><label>Approved by</label><input id="procApprovedBy" value="' + esc(p.approvedBy || '') + '"></div>' +
       '<div><label>Approval date</label><input id="procApprovedDate" value="' + esc(p.approvedDate || '') + '"></div>' +
@@ -1042,15 +1278,19 @@ function collectProcedure() {
   if ($('#procEmail')) p.email = $('#procEmail').value.trim();
   const boxes = $$('[data-pcontact]');
   if (boxes.length) p.recipients = boxes.filter(b => b.checked).map(b => b.value);
+  if ($('#setupPanel')) { collectSetup(); p.setup = JSON.parse(JSON.stringify(state.procedureSetup)); }
   return p;
 }
 
 async function saveProcedure(silent) {
   const p = collectProcedure();
   if (!p || !state.open) return;
+  const keepPhotos = p.photos, keepDrawings = p.drawings;   // attachments are managed separately; keep their live copies (incl. signed photo URLs)
   try {
     const r = await api('PUT', '/api/job/' + encodeURIComponent(state.open) + '/procedure', p);
     state.procedureDraft = JSON.parse(JSON.stringify(r.procedure));
+    if (keepPhotos) state.procedureDraft.photos = keepPhotos;
+    if (keepDrawings) state.procedureDraft.drawings = keepDrawings;
     state.detail.procedure = r.procedure;
     if (!silent) toast('Procedure saved.');
   } catch (e) { toast(e.message, true); }
@@ -1104,7 +1344,9 @@ function printProcedure(preview) {
     '.fl{color:#5b6770}p{margin:5px 0}ol.steps,ul.bul{margin:5px 0;padding-left:22px}ol.steps li,ul.bul li{margin:3px 0}' +
     'table{border-collapse:collapse;width:100%;font-size:13px;margin:6px 0}th,td{border:1px solid #d7dee4;padding:5px 8px;text-align:left}th{background:#f1f5f8}' +
     '.appr{margin-top:24px;border-top:1px solid #e9eef2;padding-top:10px;font-size:13px;display:flex;justify-content:space-between}' +
-    '.foot{margin-top:18px;color:#9aa6b1;font-size:11px}@media print{body{margin:0}h2{break-after:avoid}}' +
+    '.foot{margin-top:18px;color:#9aa6b1;font-size:11px}' +
+    '.photos{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0}.photos figure{margin:0;break-inside:avoid}.photos img{width:100%;border:1px solid #d7dee4;border-radius:4px}.photos figcaption{font-size:11px;color:#5b6770;margin-top:2px}' +
+    '@media print{body{margin:0}h2{break-after:avoid}}' +
     '</style></head><body>' +
     '<div class="lh"><img src="/logo.jpg" alt="Hydro-Wates">' +
       '<div class="co">' + esc(PROC_COMPANY.tagline) + '<br>' + esc(PROC_COMPANY.address) + '<br>Tel: ' + esc(PROC_COMPANY.tel) + '</div></div>' +
@@ -1128,6 +1370,11 @@ function printProcedure(preview) {
       ? '<ul class="bul">' + p.drawings.map(d => '<li>📄 ' + esc(d.name) + '</li>').join('') + '</ul>' +
         '<p class="muted" style="font-size:11px">Rigging drawing PDF(s) attached separately.</p>'
       : '<p class="muted">[ Attach rigging drawing ]</p>') +
+    ((p.photos || []).filter(ph => ph.url).length
+      ? '<h2>8. Site photos</h2><div class="photos">' +
+        p.photos.filter(ph => ph.url).map(ph => '<figure><img src="' + esc(ph.url) + '"><figcaption>' + esc(ph.name) + '</figcaption></figure>').join('') +
+        '</div>'
+      : '') +
     '<div class="appr"><div><b>Approved:</b> ' + esc(p.approvedBy || '________________') + '</div><div><b>Date:</b> ' + esc(p.approvedDate || '____________') + '</div></div>' +
     '<p class="foot">Hydro-Wates Project Manager · ' + esc(new Date().toLocaleString()) + '</p>' +
     '</body></html>';
@@ -1795,7 +2042,10 @@ document.addEventListener('click', async (e) => {
     }
     case 'proc-generate': {
       if (state.procedureDraft && !confirm('Generate a fresh draft? This replaces the current procedure content for this job.')) return;
-      state.procedureDraft = generateProcedure(state.detail.job, state.detail.planning);
+      collectSetup();
+      const old = state.procedureDraft;
+      state.procedureDraft = generateProcedure(state.detail.job, state.detail.planning, state.procedureSetup);
+      if (old) { state.procedureDraft.drawings = old.drawings || []; state.procedureDraft.photos = old.photos || []; }   // keep attachments across regenerate
       await saveProcedure(true);
       renderModal();
       toast('Draft procedure generated — edit freely, then print.');
@@ -1820,6 +2070,26 @@ document.addEventListener('click', async (e) => {
         if (state.procedureDraft) state.procedureDraft.drawings = r.drawings;
         renderModal();
         toast('Drawing removed.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    case 'photo-view': {
+      const ph = state.procedureDraft && (state.procedureDraft.photos || []).find(x => x.id === el.dataset.id);
+      if (ph && ph.url) { window.open(ph.url, '_blank'); return; }
+      try {
+        const r = await api('GET', '/api/job/' + encodeURIComponent(state.open) + '/photos/' + encodeURIComponent(el.dataset.id));
+        window.open(r.url, '_blank');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    case 'photo-remove': {
+      if (!confirm('Remove this photo from the procedure?')) return;
+      if ($('#procObjective')) collectProcedure();
+      try {
+        const r = await api('DELETE', '/api/job/' + encodeURIComponent(state.open) + '/photos/' + encodeURIComponent(el.dataset.id));
+        if (state.procedureDraft) state.procedureDraft.photos = r.photos;
+        renderModal();
+        toast('Photo removed.');
       } catch (err) { toast(err.message, true); }
       return;
     }
@@ -2177,6 +2447,12 @@ document.addEventListener('change', async (e) => {
   if (what === 'compact') { state.compact = el.checked; try { localStorage.setItem('pmCompact', el.checked ? '1' : '0'); } catch (e) {} $('#cols').innerHTML = colsHtml(); }
   if (what === 'po-show-done') { state.poShowCompleted = el.checked; const b = $('#poBody'); if (b) b.innerHTML = poBodyHtml(); }
   if (what === 'sm-show-all') { state.smShowAll = el.checked; const b = $('#smBody'); if (b) b.innerHTML = smBodyHtml(); }
+  if (what === 'setup-jobtype' || what === 'setup-static') {
+    collectSetup();
+    const panel = $('#setupPanel');
+    if (panel && state.detail) panel.outerHTML = setupPanelHtml(state.procedureSetup, state.detail.job);
+    return;
+  }
   if (what === 'draw-file') {
     const file = el.files && el.files[0];
     el.value = '';                                  // let the same file be re-picked later
@@ -2195,6 +2471,29 @@ document.addEventListener('change', async (e) => {
       if (state.procedureDraft) state.procedureDraft.drawings = j.drawings;
       renderModal();
       toast('Attached ' + file.name + '.');
+    } catch (err) { toast(err.message || 'Upload failed.', true); }
+    return;
+  }
+  if (what === 'photo-file') {
+    const file = el.files && el.files[0];
+    el.value = '';
+    if (!file) return;
+    if (!/^image\//.test(file.type || '') && !/\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)) { toast('Please choose an image.', true); return; }
+    if ($('#procObjective')) collectProcedure();
+    toast('Processing ' + file.name + '…');
+    let blob;
+    try { blob = await downscaleImage(file, 1600, 0.82); }
+    catch (err) { toast(err.message || 'Could not process that image.', true); return; }
+    try {
+      const opt = { method: 'POST', headers: { 'Content-Type': 'image/jpeg', 'x-filename': file.name }, body: blob };
+      if (authToken) opt.headers['Authorization'] = 'Bearer ' + authToken;
+      const resp = await fetch('/api/job/' + encodeURIComponent(state.open) + '/photos', opt);
+      const j = await resp.json().catch(() => ({}));
+      if (resp.status === 401) { renderLogin('Your session has expired — please sign in again.'); return; }
+      if (!resp.ok) throw new Error(j.error || ('Upload failed (' + resp.status + ')'));
+      if (state.procedureDraft) state.procedureDraft.photos = j.photos;
+      renderModal();
+      toast('Photo added.');
     } catch (err) { toast(err.message || 'Upload failed.', true); }
     return;
   }

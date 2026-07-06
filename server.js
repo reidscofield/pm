@@ -1151,26 +1151,29 @@ function readBody(req) {
   });
 }
 
-// ---- rigging-drawing PDFs, stored in Supabase Storage (kept OUT of app state so
-// the pm_app_state table stays small — only a tiny reference lives on the procedure).
+// ---- procedure attachments (rigging-drawing PDFs + site photos), stored in Supabase
+// Storage and kept OUT of app state so pm_app_state stays small — only a tiny reference
+// (name/size/path) lives on the procedure.
 const DRAW_BUCKET = 'procedure-drawings';
-const DRAW_MAX = 4 * 1024 * 1024;   // 4 MB per PDF — comfortably under the serverless body limit
+const PHOTO_BUCKET = 'procedure-photos';
+const DRAW_MAX = 4 * 1024 * 1024;    // 4 MB per PDF — under the serverless body limit
+const PHOTO_MAX = 4 * 1024 * 1024;   // photos are downscaled client-side; this is a backstop
 function storageCfg() {
   return { url: (process.env.SUPABASE_URL || '').replace(/\/+$/, ''), key: process.env.SUPABASE_SERVICE_KEY || '' };
 }
 function storageOn() { const c = storageCfg(); return !!(c.url && c.key); }
-async function storagePutPdf(path, buf) {
+async function storagePut(bucket, path, buf, contentType) {
   const c = storageCfg();
-  const r = await fetch(c.url + '/storage/v1/object/' + DRAW_BUCKET + '/' + path, {
+  const r = await fetch(c.url + '/storage/v1/object/' + bucket + '/' + path, {
     method: 'POST',
-    headers: { apikey: c.key, Authorization: 'Bearer ' + c.key, 'Content-Type': 'application/pdf', 'x-upsert': 'true' },
+    headers: { apikey: c.key, Authorization: 'Bearer ' + c.key, 'Content-Type': contentType, 'x-upsert': 'true' },
     body: buf
   });
   if (!r.ok) throw new Error('Storage upload failed (' + r.status + ')');
 }
-async function storageSignUrl(path, expiresIn) {
+async function storageSign(bucket, path, expiresIn) {
   const c = storageCfg();
-  const r = await fetch(c.url + '/storage/v1/object/sign/' + DRAW_BUCKET + '/' + path, {
+  const r = await fetch(c.url + '/storage/v1/object/sign/' + bucket + '/' + path, {
     method: 'POST',
     headers: { apikey: c.key, Authorization: 'Bearer ' + c.key, 'Content-Type': 'application/json' },
     body: JSON.stringify({ expiresIn: expiresIn || 3600 })
@@ -1179,13 +1182,21 @@ async function storageSignUrl(path, expiresIn) {
   const d = await r.json();
   return c.url + '/storage/v1' + d.signedURL;
 }
-async function storageDelPath(path) {
+async function storageDel(bucket, path) {
   const c = storageCfg();
   try {
-    await fetch(c.url + '/storage/v1/object/' + DRAW_BUCKET + '/' + path, {
+    await fetch(c.url + '/storage/v1/object/' + bucket + '/' + path, {
       method: 'DELETE', headers: { apikey: c.key, Authorization: 'Bearer ' + c.key }
     });
   } catch (e) {}
+}
+// Attach fresh signed view URLs to a photo list — thumbnails need a src at render time.
+async function photosWithUrls(photos) {
+  const list = Array.isArray(photos) ? photos : [];
+  return Promise.all(list.map(async p => {
+    try { return Object.assign({}, p, { url: await storageSign(PHOTO_BUCKET, p.path, 3600) }); }
+    catch (e) { return Object.assign({}, p, { url: '' }); }
+  }));
 }
 function readRawBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
@@ -1415,7 +1426,7 @@ async function handleApi(req, res, u) {
         const name = String(req.headers['x-filename'] || 'drawing.pdf').replace(/[^A-Za-z0-9._ -]/g, '_').replace(/\.pdf$/i, '').slice(0, 100) + '.pdf';
         const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         const path = dkey.replace(/[^A-Za-z0-9._-]/g, '_') + '/' + id + '-' + name;
-        try { await storagePutPdf(path, buf); }
+        try { await storagePut(DRAW_BUCKET, path, buf, 'application/pdf'); }
         catch (e) { return bad(res, 502, String(e.message || e)); }
         const prev = procOf() || {};
         const drawings = (Array.isArray(prev.drawings) ? prev.drawings : []).concat([{ id, name, size: buf.length, path, at: new Date().toISOString() }]);
@@ -1425,16 +1436,67 @@ async function handleApi(req, res, u) {
       if (drawId && method === 'GET') {                   // signed view link
         const d = (procOf() || {}).drawings && (procOf().drawings || []).find(x => x.id === drawId);
         if (!d) return bad(res, 404, 'Drawing not found');
-        try { return ok(res, { url: await storageSignUrl(d.path, 3600), name: d.name }); }
+        try { return ok(res, { url: await storageSign(DRAW_BUCKET, d.path, 3600), name: d.name }); }
         catch (e) { return bad(res, 502, String(e.message || e)); }
       }
       if (drawId && method === 'DELETE') {                // remove a drawing
         const prev = procOf();
         if (!prev) return bad(res, 404, 'No procedure for this job');
         const d = (prev.drawings || []).find(x => x.id === drawId);
-        if (d) await storageDelPath(d.path);
+        if (d) await storageDel(DRAW_BUCKET, d.path);
         persist((prev.drawings || []).filter(x => x.id !== drawId));
         return ok(res, { drawings: (prev.drawings || []).filter(x => x.id !== drawId) });
+      }
+      return bad(res, 405, 'Method not allowed');
+    }
+
+    // ---- site-photo (image) attachments on a job's procedure ----
+    const mPhoto = rest.match(/^(.*)\/photos(?:\/([^/]+))?$/);
+    if (mPhoto) {
+      const pkey = mPhoto[1];
+      const photoId = mPhoto[2] ? decodeURIComponent(mPhoto[2]) : '';
+      const procOf = () => (local[pkey] && local[pkey].procedure) || null;
+      const persist = (photos) => {
+        const procedure = Object.assign({}, procOf() || {}, { photos, updatedAt: new Date().toISOString() });
+        local[pkey] = Object.assign({}, local[pkey], { procedure });
+        writeJson(FILES.jobs, local);
+      };
+      if (!storageOn()) return bad(res, 501, 'File storage is not configured on this server.');
+
+      if (!photoId && method === 'POST') {                // upload an image (downscaled to JPEG client-side)
+        let buf;
+        try { buf = await readRawBody(req, PHOTO_MAX + 8192); }
+        catch (e) { return bad(res, 413, 'That photo is too large.'); }
+        if (buf.length > PHOTO_MAX) return bad(res, 413, 'That photo is too large.');
+        const isJpg = buf.length > 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF;
+        const isPng = buf.length > 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47;
+        if (!isJpg && !isPng) return bad(res, 400, 'That file is not a JPEG or PNG image.');
+        const ext = isPng ? 'png' : 'jpg';
+        const rawName = String(req.headers['x-filename'] || 'photo').replace(/[^A-Za-z0-9._ -]/g, '_').replace(/\.[A-Za-z0-9]+$/, '').slice(0, 80);
+        const name = (rawName || 'photo') + '.' + ext;
+        const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        const path = pkey.replace(/[^A-Za-z0-9._-]/g, '_') + '/' + id + '.' + ext;
+        try { await storagePut(PHOTO_BUCKET, path, buf, isPng ? 'image/png' : 'image/jpeg'); }
+        catch (e) { return bad(res, 502, String(e.message || e)); }
+        const prev = procOf() || {};
+        const photos = (Array.isArray(prev.photos) ? prev.photos : []).concat([{ id, name, size: buf.length, path, at: new Date().toISOString() }]);
+        persist(photos);
+        return ok(res, { photos: await photosWithUrls(photos) });
+      }
+      if (photoId && method === 'GET') {                  // signed full-size link
+        const ph = (procOf() || {}).photos && (procOf().photos || []).find(x => x.id === photoId);
+        if (!ph) return bad(res, 404, 'Photo not found');
+        try { return ok(res, { url: await storageSign(PHOTO_BUCKET, ph.path, 3600), name: ph.name }); }
+        catch (e) { return bad(res, 502, String(e.message || e)); }
+      }
+      if (photoId && method === 'DELETE') {
+        const prev = procOf();
+        if (!prev) return bad(res, 404, 'No procedure for this job');
+        const ph = (prev.photos || []).find(x => x.id === photoId);
+        if (ph) await storageDel(PHOTO_BUCKET, ph.path);
+        const photos = (prev.photos || []).filter(x => x.id !== photoId);
+        persist(photos);
+        return ok(res, { photos: await photosWithUrls(photos) });
       }
       return bad(res, 405, 'Method not allowed');
     }
@@ -1544,6 +1606,8 @@ async function handleApi(req, res, u) {
         equipmentSource: (body.equipmentSource !== undefined ? body.equipmentSource : prev.equipmentSource) || null,
         ppe: arr(body.ppe, prev.ppe),
         drawings: Array.isArray(prev.drawings) ? prev.drawings : [],   // managed via the /drawings endpoints, never clobbered by a form save
+        photos: Array.isArray(prev.photos) ? prev.photos.map(p => { const q = Object.assign({}, p); delete q.url; return q; }) : [],   // same for /photos; strip any signed url before persisting
+        setup: (body.setup && typeof body.setup === 'object' && !Array.isArray(body.setup)) ? body.setup : (prev.setup || null),   // the "Procedure setup" answers that drove generation
         preJob: str(body.preJob, prev.preJob),
         setupSteps: arr(body.setupSteps, prev.setupSteps),
         executionSteps: arr(body.executionSteps, prev.executionSteps),
@@ -1610,7 +1674,7 @@ async function handleApi(req, res, u) {
           archived: done.archived, archivedHow: done.how
         },
         planning: l.planning || null,
-        procedure: l.procedure || null,
+        procedure: l.procedure ? Object.assign({}, l.procedure, { photos: await photosWithUrls(l.procedure.photos) }) : null,
         zoho: { dc: s.dc, orgId: s.orgId }
       });
     }
