@@ -1151,6 +1151,51 @@ function readBody(req) {
   });
 }
 
+// ---- rigging-drawing PDFs, stored in Supabase Storage (kept OUT of app state so
+// the pm_app_state table stays small — only a tiny reference lives on the procedure).
+const DRAW_BUCKET = 'procedure-drawings';
+const DRAW_MAX = 4 * 1024 * 1024;   // 4 MB per PDF — comfortably under the serverless body limit
+function storageCfg() {
+  return { url: (process.env.SUPABASE_URL || '').replace(/\/+$/, ''), key: process.env.SUPABASE_SERVICE_KEY || '' };
+}
+function storageOn() { const c = storageCfg(); return !!(c.url && c.key); }
+async function storagePutPdf(path, buf) {
+  const c = storageCfg();
+  const r = await fetch(c.url + '/storage/v1/object/' + DRAW_BUCKET + '/' + path, {
+    method: 'POST',
+    headers: { apikey: c.key, Authorization: 'Bearer ' + c.key, 'Content-Type': 'application/pdf', 'x-upsert': 'true' },
+    body: buf
+  });
+  if (!r.ok) throw new Error('Storage upload failed (' + r.status + ')');
+}
+async function storageSignUrl(path, expiresIn) {
+  const c = storageCfg();
+  const r = await fetch(c.url + '/storage/v1/object/sign/' + DRAW_BUCKET + '/' + path, {
+    method: 'POST',
+    headers: { apikey: c.key, Authorization: 'Bearer ' + c.key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expiresIn: expiresIn || 3600 })
+  });
+  if (!r.ok) throw new Error('Could not create a view link (' + r.status + ')');
+  const d = await r.json();
+  return c.url + '/storage/v1' + d.signedURL;
+}
+async function storageDelPath(path) {
+  const c = storageCfg();
+  try {
+    await fetch(c.url + '/storage/v1/object/' + DRAW_BUCKET + '/' + path, {
+      method: 'DELETE', headers: { apikey: c.key, Authorization: 'Bearer ' + c.key }
+    });
+  } catch (e) {}
+}
+function readRawBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', c => { size += c.length; if (size > maxBytes) { reject(Object.assign(new Error('Body too large'), { code: 'TOO_LARGE' })); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 function publicSettings(s) {
   const out = Object.assign({}, s);
   delete out.refreshToken;
@@ -1300,6 +1345,21 @@ async function handleApi(req, res, u) {
         archived: done.archived, archivedHow: done.how
       };
     });
+    // "Made a job" date: the EARLIEST date across every block that shares this
+    // HWI (lead quote, estimate, sales order …). A job often surfaces first as a
+    // Lead List quote and only later as Zoho documents, so we want when it first
+    // entered the pipeline — not the latest document date on the winning card.
+    const earliestByHwi = new Map();
+    for (const j of mapped) {
+      const k = hwiKey(j.hwi);
+      if (k.length < 4 || !j.date) continue;
+      const cur = earliestByHwi.get(k);
+      if (!cur || j.date < cur) earliestByHwi.set(k, j.date);
+    }
+    for (const j of mapped) {
+      const k = hwiKey(j.hwi);
+      j.createdDate = ((k.length >= 4 && earliestByHwi.get(k)) || j.date || '');
+    }
     // Completed jobs are simply not shown — once a job is invoiced it drops off
     // the board entirely (no archive, no toggle). The Invoices page keeps the
     // invoiced history.
@@ -1332,6 +1392,52 @@ async function handleApi(req, res, u) {
     const sub = m2 ? m2[2] : '';
     const s = getSettings();
     const local = readJson(FILES.jobs, {});
+
+    // ---- rigging-drawing PDF attachments on a job's procedure ----
+    const mDraw = rest.match(/^(.*)\/drawings(?:\/([^/]+))?$/);
+    if (mDraw) {
+      const dkey = mDraw[1];
+      const drawId = mDraw[2] ? decodeURIComponent(mDraw[2]) : '';
+      const procOf = () => (local[dkey] && local[dkey].procedure) || null;
+      const persist = (drawings) => {
+        const procedure = Object.assign({}, procOf() || {}, { drawings, updatedAt: new Date().toISOString() });
+        local[dkey] = Object.assign({}, local[dkey], { procedure });
+        writeJson(FILES.jobs, local);
+      };
+      if (!storageOn()) return bad(res, 501, 'File storage is not configured on this server.');
+
+      if (!drawId && method === 'POST') {                 // upload a PDF
+        let buf;
+        try { buf = await readRawBody(req, DRAW_MAX + 8192); }
+        catch (e) { return bad(res, 413, 'That PDF is over the 4 MB limit — please attach a smaller file.'); }
+        if (buf.length > DRAW_MAX) return bad(res, 413, 'That PDF is over the 4 MB limit — please attach a smaller file.');
+        if (buf.length < 5 || buf.slice(0, 5).toString('latin1') !== '%PDF-') return bad(res, 400, 'That file is not a PDF.');
+        const name = String(req.headers['x-filename'] || 'drawing.pdf').replace(/[^A-Za-z0-9._ -]/g, '_').replace(/\.pdf$/i, '').slice(0, 100) + '.pdf';
+        const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        const path = dkey.replace(/[^A-Za-z0-9._-]/g, '_') + '/' + id + '-' + name;
+        try { await storagePutPdf(path, buf); }
+        catch (e) { return bad(res, 502, String(e.message || e)); }
+        const prev = procOf() || {};
+        const drawings = (Array.isArray(prev.drawings) ? prev.drawings : []).concat([{ id, name, size: buf.length, path, at: new Date().toISOString() }]);
+        persist(drawings);
+        return ok(res, { drawings });
+      }
+      if (drawId && method === 'GET') {                   // signed view link
+        const d = (procOf() || {}).drawings && (procOf().drawings || []).find(x => x.id === drawId);
+        if (!d) return bad(res, 404, 'Drawing not found');
+        try { return ok(res, { url: await storageSignUrl(d.path, 3600), name: d.name }); }
+        catch (e) { return bad(res, 502, String(e.message || e)); }
+      }
+      if (drawId && method === 'DELETE') {                // remove a drawing
+        const prev = procOf();
+        if (!prev) return bad(res, 404, 'No procedure for this job');
+        const d = (prev.drawings || []).find(x => x.id === drawId);
+        if (d) await storageDelPath(d.path);
+        persist((prev.drawings || []).filter(x => x.id !== drawId));
+        return ok(res, { drawings: (prev.drawings || []).filter(x => x.id !== drawId) });
+      }
+      return bad(res, 405, 'Method not allowed');
+    }
 
     if (sub === 'contacts' && method === 'GET') {
       if (key.startsWith('received:')) return ok(res, { contacts: [] }); // Shop Master jobs carry no Zoho contact link
@@ -1437,6 +1543,7 @@ async function handleApi(req, res, u) {
         equipment: arr(body.equipment, prev.equipment),
         equipmentSource: (body.equipmentSource !== undefined ? body.equipmentSource : prev.equipmentSource) || null,
         ppe: arr(body.ppe, prev.ppe),
+        drawings: Array.isArray(prev.drawings) ? prev.drawings : [],   // managed via the /drawings endpoints, never clobbered by a form save
         preJob: str(body.preJob, prev.preJob),
         setupSteps: arr(body.setupSteps, prev.setupSteps),
         executionSteps: arr(body.executionSteps, prev.executionSteps),

@@ -98,6 +98,17 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 .ppe-grid .chk.ppe-opt input { cursor: pointer; }
 .ppe-other-lbl { display: block; margin-top: 6px !important; font-weight: normal; font-size: 12px; color: var(--muted); }
 
+/* Project-drawing PDF attachments on the procedure */
+.draw-box { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 6px 0 4px; background: var(--card, #fff); }
+.draw-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.draw-row:last-of-type { border-bottom: 0; }
+.draw-ic { flex: 0 0 auto; }
+.draw-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--ink); }
+.draw-size { flex: 0 0 auto; font-size: 12px; }
+.draw-add { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.draw-box .btn.small { padding: 3px 9px; font-size: 12px; }
+.draw-box .btn.ghost { background: transparent; }
+
 /* ---------- dashboard columns ---------- */
 .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }

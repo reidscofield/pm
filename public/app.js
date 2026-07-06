@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-01 · 36';
+const BUILD = 'build 2026-07-01 · 38';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -314,7 +314,7 @@ function jobCard(j) {
     '<div class="card-mid">' +
       '<span class="chip mod">' + esc(MOD_BADGE[j.module] || j.module) + '</span>' +
       (j.number && j.number !== j.hwi ? '<span>' + esc(j.number) + '</span>' : '') +
-      '<span>·</span><span>' + esc(fmtDate(j.date)) + '</span>' +
+      '<span>·</span><span>' + esc(fmtDate(j.createdDate || j.date)) + '</span>' +
       (j.status ? '<span class="chip zstatus">' + esc(j.status) + '</span>' : '') +
       (j.hidden ? '<span class="chip zstatus">hidden</span>' : '') +
     '</div>' +
@@ -340,7 +340,8 @@ function jobCardCompact(j) {
 }
 
 function colsHtml() {
-  const jobs = filteredJobs().slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const jobs = filteredJobs().slice().sort((a, b) =>
+    ((b.createdDate || b.date) || '').localeCompare((a.createdDate || a.date) || ''));
   const card = state.compact ? jobCardCompact : jobCard;
   return '<div class="cols' + (state.compact ? ' compact' : '') + '">' + CATS.map(([cat, label]) => {
     const list = jobs.filter(j => j.category === cat);
@@ -789,6 +790,34 @@ function ppeChecklistHtml(p) {
       '" placeholder="Any PPE not in the list above">' + esc(extra.join('\n')) + '</textarea>';
 }
 
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+// Rigging-drawing PDFs attached to the procedure (stored in Supabase Storage).
+function drawingsTabHtml(p) {
+  const list = (p && p.drawings) || [];
+  const rows = list.map(d =>
+    '<div class="draw-row">' +
+      '<span class="draw-ic">📄</span>' +
+      '<span class="draw-name" title="' + esc(d.name) + '">' + esc(d.name) + '</span>' +
+      '<span class="muted draw-size">' + fmtBytes(d.size) + '</span>' +
+      '<button type="button" class="btn small" data-action="draw-view" data-id="' + esc(d.id) + '">View</button>' +
+      '<button type="button" class="btn small ghost" data-action="draw-remove" data-id="' + esc(d.id) + '">Remove</button>' +
+    '</div>'
+  ).join('');
+  return '<div class="draw-box">' +
+    (rows || '<div class="muted" style="font-size:13px;padding:2px 0 6px">No drawings attached yet.</div>') +
+    '<div class="draw-add">' +
+      '<label class="btn small">➕ Add PDF drawing' +
+        '<input type="file" accept="application/pdf,.pdf" data-change="draw-file" style="display:none"></label>' +
+      '<span class="muted" style="font-size:12px">PDF only, up to 4 MB each.</span>' +
+    '</div>' +
+  '</div>';
+}
+
 // Read a structured planning answer by question id (drives the procedure cascade).
 function planAns(planning, id) {
   if (!planning || !planning.questions) return '';
@@ -972,6 +1001,8 @@ function procedureTabHtml(d) {
     '<label style="margin-top:8px">6.2 Test setup steps <span class="muted">(one per line)</span></label>' + ta('procSetup', lines(p.setupSteps), rowsFor(p.setupSteps)) +
     '<label style="margin-top:8px">6.3 Load test execution steps <span class="muted">(one per line)</span></label>' + ta('procExec', lines(p.executionSteps), rowsFor(p.executionSteps)) +
     '<label style="margin-top:8px">6.4 Information logging</label>' + ta('procLogging', p.logging, 3) +
+    '<label style="margin-top:8px">7. Project drawings <span class="muted">(PDF rigging drawings)</span></label>' +
+    drawingsTabHtml(p) +
     '<div class="frow" style="margin-top:8px">' +
       '<div><label>Approved by</label><input id="procApprovedBy" value="' + esc(p.approvedBy || '') + '"></div>' +
       '<div><label>Approval date</label><input id="procApprovedDate" value="' + esc(p.approvedDate || '') + '"></div>' +
@@ -1093,7 +1124,10 @@ function printProcedure(preview) {
     '<h3>6.2 Test setup — 100% function test &amp; 125% overload</h3>' + steps(p.setupSteps) +
     '<h3>6.3 Load test execution</h3>' + steps(p.executionSteps) +
     '<h3>6.4 Information logging</h3>' + para(p.logging) +
-    '<h2>7. Project drawings</h2><p class="muted">[ Attach rigging drawing ]</p>' +
+    '<h2>7. Project drawings</h2>' + ((p.drawings || []).length
+      ? '<ul class="bul">' + p.drawings.map(d => '<li>📄 ' + esc(d.name) + '</li>').join('') + '</ul>' +
+        '<p class="muted" style="font-size:11px">Rigging drawing PDF(s) attached separately.</p>'
+      : '<p class="muted">[ Attach rigging drawing ]</p>') +
     '<div class="appr"><div><b>Approved:</b> ' + esc(p.approvedBy || '________________') + '</div><div><b>Date:</b> ' + esc(p.approvedDate || '____________') + '</div></div>' +
     '<p class="foot">Hydro-Wates Project Manager · ' + esc(new Date().toLocaleString()) + '</p>' +
     '</body></html>';
@@ -1769,6 +1803,26 @@ document.addEventListener('click', async (e) => {
       return;
     }
     case 'proc-pull-equipment': pullLoadoutEquipment(state.open, { manual: true }); return;
+    case 'draw-view': {
+      const old = el.textContent; el.textContent = '…'; el.disabled = true;
+      try {
+        const r = await api('GET', '/api/job/' + encodeURIComponent(state.open) + '/drawings/' + encodeURIComponent(el.dataset.id));
+        window.open(r.url, '_blank');
+      } catch (err) { toast(err.message, true); }
+      el.textContent = old; el.disabled = false;
+      return;
+    }
+    case 'draw-remove': {
+      if (!confirm('Remove this drawing from the procedure?')) return;
+      if ($('#procObjective')) collectProcedure();   // keep any in-progress edits
+      try {
+        const r = await api('DELETE', '/api/job/' + encodeURIComponent(state.open) + '/drawings/' + encodeURIComponent(el.dataset.id));
+        if (state.procedureDraft) state.procedureDraft.drawings = r.drawings;
+        renderModal();
+        toast('Drawing removed.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
     case 'proc-save': await saveProcedure(); return;
     case 'proc-print': collectProcedure(); printProcedure(); return;
     case 'proc-preview': collectProcedure(); printProcedure(true); return;
@@ -2123,6 +2177,27 @@ document.addEventListener('change', async (e) => {
   if (what === 'compact') { state.compact = el.checked; try { localStorage.setItem('pmCompact', el.checked ? '1' : '0'); } catch (e) {} $('#cols').innerHTML = colsHtml(); }
   if (what === 'po-show-done') { state.poShowCompleted = el.checked; const b = $('#poBody'); if (b) b.innerHTML = poBodyHtml(); }
   if (what === 'sm-show-all') { state.smShowAll = el.checked; const b = $('#smBody'); if (b) b.innerHTML = smBodyHtml(); }
+  if (what === 'draw-file') {
+    const file = el.files && el.files[0];
+    el.value = '';                                  // let the same file be re-picked later
+    if (!file) return;
+    if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { toast('Please choose a PDF file.', true); return; }
+    if (file.size > 4 * 1024 * 1024) { toast('That PDF is over the 4 MB limit — please attach a smaller file.', true); return; }
+    if ($('#procObjective')) collectProcedure();    // keep any in-progress edits before re-render
+    toast('Uploading ' + file.name + '…');
+    try {
+      const opt = { method: 'POST', headers: { 'Content-Type': 'application/pdf', 'x-filename': file.name }, body: file };
+      if (authToken) opt.headers['Authorization'] = 'Bearer ' + authToken;
+      const resp = await fetch('/api/job/' + encodeURIComponent(state.open) + '/drawings', opt);
+      const j = await resp.json().catch(() => ({}));
+      if (resp.status === 401) { renderLogin('Your session has expired — please sign in again.'); return; }
+      if (!resp.ok) throw new Error(j.error || ('Upload failed (' + resp.status + ')'));
+      if (state.procedureDraft) state.procedureDraft.drawings = j.drawings;
+      renderModal();
+      toast('Attached ' + file.name + '.');
+    } catch (err) { toast(err.message || 'Upload failed.', true); }
+    return;
+  }
   if (what === 'tpl-type') { collectTemplates(); renderTemplates(); }
   if (what === 'resp-pick') {
     const opt = el.selectedOptions[0];
