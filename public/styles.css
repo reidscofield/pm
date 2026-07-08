@@ -132,6 +132,13 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 .setup-hold input { width: 52px; }
 .setup-box .btn.primary { margin-top: 10px; }
 
+/* Remove-from-board + Recently deleted */
+.btn.danger { color: #b23; border-color: #e6b0aa; }
+.btn.danger:hover { background: #fdeeec; }
+.rm-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--line); }
+.rm-row:last-child { border-bottom: 0; }
+.rm-info { min-width: 0; overflow: hidden; }
+
 /* ---------- dashboard columns ---------- */
 .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } }
@@ -148,10 +155,22 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 .col-sales .col-head { color: var(--sales); }     .col-sales .count { background: var(--sales); }
 
 .card {
+  position: relative;
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
   padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
   border-left: 4px solid transparent; transition: transform .06s, box-shadow .06s;
 }
+/* quick "remove from board" ✕ on the card corner */
+.card-x {
+  position: absolute; top: 6px; right: 8px; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--muted);
+  font-size: 12px; line-height: 1; cursor: pointer; opacity: .4; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+}
+.card-x:hover { opacity: 1; background: #fdeeec; color: #c0392b; }
+.card:hover .card-x { opacity: .7; }
+.card.compact .card-x { position: static; flex: none; width: 18px; height: 18px; opacity: .4; }
+.card.compact:hover .card-x { opacity: .7; }
 .card:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(16, 42, 67, .12), 0 8px 24px rgba(16, 42, 67, .08); }
 .col-rental .card { border-left-color: var(--rental); }
 .col-service .card { border-left-color: var(--service); }

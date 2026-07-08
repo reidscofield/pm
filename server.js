@@ -290,19 +290,10 @@ function invoicedHwisFrom(jobs) {
   return set;
 }
 
-// A load-test job is quick-turnaround: once it's this old with nothing open, it's
-// finished (or a dead quote) and drops off the active board. Tune STALE_DAYS to
-// widen/narrow the window. The manual "keep active" override always pins it back on.
-const STALE_DAYS = 90;
-function isStale(dateStr) {
-  const t = Date.parse(dateStr);
-  return !isNaN(t) && (Date.now() - t) > STALE_DAYS * 86400000;
-}
-
-// Whether a job is completed and how. A job is done once a SENT Zoho invoice exists
-// for its HWI (or it IS that invoice), the Lead List records an InvoicedTotal /
-// InvoiceDate for it, or it's older than STALE_DAYS. A manual "keep active" override
-// always wins so the PM can force a job back onto the board.
+// Whether a job is completed (invoiced) and how. A job is done — off the active
+// board — once a SENT Zoho invoice exists for its HWI (or it IS that invoice), or
+// the Lead List records an InvoicedTotal / InvoiceDate for it. "Complete" = an
+// invoice was CREATED (paid or not). A manual "keep active" override always wins.
 function completedState(b, l, hwi, invoicedHwis, idx) {
   const arch = archiveState(b, l);
   if (arch.how === 'forced-active') return { archived: false, how: 'forced-active' };
@@ -312,7 +303,6 @@ function completedState(b, l, hwi, invoicedHwis, idx) {
     (hwi ? !!(idx.byHwi.get(hk) || {}).invoiced : false);              // the Lead List says it's billed
   if (arch.archived) return { archived: true, how: arch.how };
   if (invoiced) return { archived: true, how: 'invoiced' };
-  if (isStale(b.date)) return { archived: true, how: 'stale' };        // old with nothing open -> finished
   return { archived: false, how: arch.how };
 }
 
@@ -998,7 +988,8 @@ function computeLeads(s) {
         title: fieldToText(f.Title),
         hwi: String(f.QuoteNum || '').trim().toUpperCase(),   // the job number (Lead List QuoteNum)
         company: map.company ? fieldToText(f[map.company]) : '',
-        po: map.po ? fieldToText(f[map.po]) : '',
+        po: fieldToText(map.po ? f[map.po] : f.PONum),   // PO received — from the mapped column, else the Lead List PONum
+
         value: map.value ? parseMoney(f[map.value]) : null,
         date: (map.date ? fieldToText(f[map.date]) : String(it.created || '')).slice(0, 10)
       });
@@ -1054,11 +1045,12 @@ function leadAsJob(r, demo) {
 function openLeadJobs(s) {
   try {
     const c = computeLeads(s);
-    // A dashboard card must be a real job — i.e. carry a job number (HWI). Leads
-    // without a QuoteNum are raw inquiries, not jobs, so they don't get a card.
-    // (Demo leads have no QuoteNum, so keep showing them in demo mode.)
+    // A dashboard card must be a real, active job: it carries a job number (HWI)
+    // AND a PO (the customer has committed), and it hasn't been invoiced yet. Leads
+    // with no QuoteNum are raw inquiries; leads with no PO are quotes not yet won —
+    // neither gets a card. (Demo leads are exempt so demo mode still populates.)
     return c.leads
-      .filter(l => !l.completed && (c.demo || l.hwi))
+      .filter(l => !l.completed && (c.demo || (l.hwi && String(l.po || '').trim() !== '')))
       .map(l => leadAsJob(l, c.demo));
   } catch (e) { return []; }
 }
@@ -1381,10 +1373,11 @@ async function handleApi(req, res, u) {
       const k = hwiKey(j.hwi);
       j.createdDate = ((k.length >= 4 && earliestByHwi.get(k)) || j.date || '');
     }
-    // Completed jobs are simply not shown — once a job is invoiced it drops off
-    // the board entirely (no archive, no toggle). The Invoices page keeps the
-    // invoiced history.
-    const activeMapped = mapped.filter(j => !j.archived);
+    // The active board = jobs that carry a PO (the customer has committed) AND have
+    // NOT been invoiced (an invoice = the job is complete, paid or not). Anything
+    // invoiced, or with no PO on record, drops off entirely — the Invoices page
+    // keeps the invoiced history.
+    const activeMapped = mapped.filter(j => !j.archived && String(j.reference || '').trim() !== '');
     // One card per job (HWI). The same job can surface as a lead, an estimate, a
     // sales order, and an invoice — keep the most useful single card. Lead cards
     // win (they carry the Lead List category + value); cards with no HWI can't be
@@ -1403,6 +1396,23 @@ async function handleApi(req, res, u) {
       jobs, demo, connected: !!s.refreshToken, orgName: s.orgName || '',
       lastSync: demo ? null : cache.lastSync, sync: syncState
     });
+  }
+
+  // ---- Recently deleted: jobs manually removed from the board (archiveOverride='archived').
+  if (p === '/api/removed' && method === 'GET') {
+    const s = getSettings();
+    const local = readJson(FILES.jobs, {});
+    const keys = Object.keys(local).filter(k => local[k] && local[k].archiveOverride === 'archived');
+    if (!keys.length) return ok(res, { removed: [] });
+    const byKey = new Map(currentJobs(s).concat(openLeadJobs(s)).map(b => [b.key, b]));
+    const idx = leadIndex(readJson(FILES.cache, {}));
+    const removed = keys.map(k => {
+      const b = byKey.get(k); const l = local[k] || {};
+      if (!b) return { key: k, hwi: '', customer: '(no longer in the sync window)', po: '', total: null, currency: '', category: '', removedAt: l.removedAt || null };
+      const r = resolveJob(b, local, s, idx);
+      return { key: k, hwi: r.hwi, customer: b.customer || '', po: b.reference || '', total: b.total, currency: b.currency, category: r.category, removedAt: l.removedAt || null };
+    }).sort((a, bb) => String(bb.removedAt || '').localeCompare(String(a.removedAt || '')));
+    return ok(res, { removed });
   }
 
   // ---- single job + local edits
@@ -1653,6 +1663,8 @@ async function handleApi(req, res, u) {
       if (body.archiveOverride !== undefined) {
         if (body.archiveOverride === 'archived' || body.archiveOverride === 'active') l.archiveOverride = body.archiveOverride;
         else delete l.archiveOverride;
+        if (body.archiveOverride === 'archived') l.removedAt = new Date().toISOString();   // stamp for the Recently deleted list
+        else delete l.removedAt;
       }
       local[key] = l;
       writeJson(FILES.jobs, local);

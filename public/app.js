@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-01 · 42';
+const BUILD = 'build 2026-07-01 · 45';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -305,6 +305,7 @@ function filteredJobs() {
 
 function jobCard(j) {
   return '<div class="card" data-action="open-job" data-key="' + esc(j.key) + '">' +
+    '<button class="card-x" data-action="job-remove-card" data-key="' + esc(j.key) + '" title="Remove from board">✕</button>' +
     (j.hwi ? '<div class="card-hwi">' + esc(j.hwi) + '</div>'
            : '<div class="card-hwi missing" title="No job number found in Zoho or the Lead List — add the HWI to this job">No job&nbsp;#</div>') +
     '<div class="card-top">' +
@@ -336,6 +337,7 @@ function jobCardCompact(j) {
     (j.archived ? '<span class="chip finished">finished</span>' : '') +
     stageChip(j.stage) +
     '<span class="cc-total">' + esc(fmtMoney(j.total, j.currency)) + '</span>' +
+    '<button class="card-x" data-action="job-remove-card" data-key="' + esc(j.key) + '" title="Remove from board">✕</button>' +
   '</div>';
 }
 
@@ -373,6 +375,7 @@ function renderDashboard() {
       '</select>' +
       '<label class="chk"><input type="checkbox" data-change="show-hidden"' + (state.showHidden ? ' checked' : '') + '> show hidden</label>' +
       '<label class="chk"><input type="checkbox" data-change="compact"' + (state.compact ? ' checked' : '') + '> compact</label>' +
+      '<button class="btn small" data-action="open-removed" title="Jobs removed from the board — restore them here">🗑 Recently deleted</button>' +
       '<span class="muted" style="margin-left:auto;font-size:13px">' + filteredJobs().length + ' jobs</span>' +
     '</div>' +
     '<div id="cols">' + colsHtml() + '</div>';
@@ -467,6 +470,9 @@ function detailTabHtml(d) {
   '<div class="dt" style="font-size:12px;color:var(--muted);margin-bottom:2px">Line items</div>' + items +
   '<div class="plan-actions">' + zohoLink +
     '<button class="btn small" data-action="job-hide">' + (j.hidden ? 'Unhide job' : 'Hide job') + '</button>' +
+    (j.archivedHow === 'manual'
+      ? '<button class="btn small" data-action="job-restore">↩ Restore to board</button>'
+      : '<button class="btn small danger" data-action="job-remove">🗑 Remove from board</button>') +
   '</div>';
 }
 
@@ -575,6 +581,35 @@ function travelTabHtml(d) {
     (m ? '<button class="btn ghost" data-action="set-travel-mode" data-hwi="' + esc(hwi) + '" data-mode="' + m + '" style="margin-top:14px">Clear decision</button>' : '') +
     '</div>';
 }
+
+// ---- Recently deleted: jobs manually removed from the board, restorable here ----
+function removedOverlayHtml() {
+  const list = state.removed || [];
+  const rows = list.length ? list.map(r =>
+    '<div class="rm-row">' +
+      '<div class="rm-info"><b>' + esc(r.hwi || '(no HWI)') + '</b> · ' + esc(r.customer || '(no customer)') +
+        '<div class="muted" style="font-size:12px">PO ' + esc(r.po || '—') +
+          (r.removedAt ? ' · removed ' + esc(new Date(r.removedAt).toLocaleDateString()) : '') + '</div></div>' +
+      '<button class="btn small" data-action="removed-restore" data-key="' + esc(r.key) + '">↩ Restore</button>' +
+    '</div>'
+  ).join('') : '<div class="muted" style="padding:14px 2px">Nothing removed yet. Open a job and use <b>🗑 Remove from board</b> to send oddball jobs here.</div>';
+  return '<div class="overlay" data-action="removed-bg">' +
+    '<div class="dialog" style="max-width:560px">' +
+      '<div class="dialog-head"><div><h2>🗑 Recently deleted</h2>' +
+        '<div class="sub">' + list.length + ' removed · restore any job back to the board</div></div>' +
+        '<button class="btn-icon dialog-close" data-action="removed-close" title="Close">✕</button></div>' +
+      '<div class="dialog-body">' + rows + '</div>' +
+    '</div>' +
+  '</div>';
+}
+async function openRemoved() {
+  try { const r = await api('GET', '/api/removed'); state.removed = r.removed || []; }
+  catch (e) { toast(e.message, true); return; }
+  let host = document.getElementById('removedModal');
+  if (!host) { host = document.createElement('div'); host.id = 'removedModal'; document.body.appendChild(host); }
+  host.innerHTML = removedOverlayHtml();
+}
+function closeRemoved() { const h = document.getElementById('removedModal'); if (h) h.innerHTML = ''; }
 
 function renderModal() {
   const d = state.detail;
@@ -2030,6 +2065,18 @@ document.addEventListener('click', async (e) => {
     case 'sync-now': syncNow(); return;
     case 'logout': doLogout(); return;
     case 'open-job': openJob(el.dataset.key); return;
+    case 'job-remove-card': {
+      const key = el.dataset.key;
+      const j = (state.jobs || []).find(x => x.key === key);
+      const label = (j && (j.hwi || j.customer)) || 'this job';
+      if (!confirm('Remove ' + label + ' from the board?\n\nIt goes to “Recently deleted”, where you can restore it anytime.')) return;
+      try {
+        await api('PATCH', '/api/job/' + encodeURIComponent(key), { archiveOverride: 'archived' });
+        await loadJobs(); render();
+        toast('Removed — find it under 🗑 Recently deleted.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
     case 'close-modal': closeModal(); return;
 
     case 'modal-tab': {
@@ -2222,6 +2269,39 @@ document.addEventListener('click', async (e) => {
         if (row) row.hidden = j.hidden;
         renderModal();
         toast(j.hidden ? 'Job hidden (tick “show hidden” to see it).' : 'Job visible again.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    case 'job-remove': {
+      const j = state.detail.job;
+      if (!confirm('Remove ' + (j.hwi || j.customer || 'this job') + ' from the board?\n\nIt goes to “Recently deleted”, where you can restore it anytime.')) return;
+      try {
+        await api('PATCH', '/api/job/' + encodeURIComponent(j.key), { archiveOverride: 'archived' });
+        closeModal();
+        await loadJobs(); render();
+        toast('Removed — find it under 🗑 Recently deleted.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    case 'job-restore': {
+      const j = state.detail.job;
+      try {
+        await api('PATCH', '/api/job/' + encodeURIComponent(j.key), { archiveOverride: '' });
+        closeModal();
+        await loadJobs(); render();
+        toast('Restored to the board.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    case 'open-removed': await openRemoved(); return;
+    case 'removed-close': closeRemoved(); return;
+    case 'removed-bg': if (e.target === el) closeRemoved(); return;
+    case 'removed-restore': {
+      try {
+        await api('PATCH', '/api/job/' + encodeURIComponent(el.dataset.key), { archiveOverride: '' });
+        await openRemoved();          // refresh the panel in place
+        await loadJobs(); render();   // refresh the board underneath
+        toast('Restored to the board.');
       } catch (err) { toast(err.message, true); }
       return;
     }
