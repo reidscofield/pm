@@ -261,7 +261,7 @@ function leadIndex(cache) {
     if (hk.length >= 4 && !byHwi.has(hk)) {
       byHwi.set(hk, {
         quoteNum, cat, value: parseMoney(f.ValueTotal), company: fieldToText(f.Company),
-        invoiced: parseMoney(f.InvoicedTotal) != null   // the Lead List says this job has been billed
+        invoiced: parseMoney(f.InvoicedTotal) != null || !!fieldToText(f.InvoiceDate).trim()   // the Lead List says this job has been billed (invoiced total OR an invoice date)
       });
     }
     const pk = poNorm(f.PONum);
@@ -290,10 +290,19 @@ function invoicedHwisFrom(jobs) {
   return set;
 }
 
-// Whether a job is completed (invoiced) and how. A job is done once a SENT Zoho
-// invoice exists for its HWI (or it IS that invoice), or the Lead List records an
-// InvoicedTotal for it. A manual "keep active" override always wins so the PM can
-// force a job back onto the board.
+// A load-test job is quick-turnaround: once it's this old with nothing open, it's
+// finished (or a dead quote) and drops off the active board. Tune STALE_DAYS to
+// widen/narrow the window. The manual "keep active" override always pins it back on.
+const STALE_DAYS = 90;
+function isStale(dateStr) {
+  const t = Date.parse(dateStr);
+  return !isNaN(t) && (Date.now() - t) > STALE_DAYS * 86400000;
+}
+
+// Whether a job is completed and how. A job is done once a SENT Zoho invoice exists
+// for its HWI (or it IS that invoice), the Lead List records an InvoicedTotal /
+// InvoiceDate for it, or it's older than STALE_DAYS. A manual "keep active" override
+// always wins so the PM can force a job back onto the board.
 function completedState(b, l, hwi, invoicedHwis, idx) {
   const arch = archiveState(b, l);
   if (arch.how === 'forced-active') return { archived: false, how: 'forced-active' };
@@ -303,6 +312,7 @@ function completedState(b, l, hwi, invoicedHwis, idx) {
     (hwi ? !!(idx.byHwi.get(hk) || {}).invoiced : false);              // the Lead List says it's billed
   if (arch.archived) return { archived: true, how: arch.how };
   if (invoiced) return { archived: true, how: 'invoiced' };
+  if (isStale(b.date)) return { archived: true, how: 'stale' };        // old with nothing open -> finished
   return { archived: false, how: arch.how };
 }
 
