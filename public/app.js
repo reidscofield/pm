@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-01 · 46';
+const BUILD = 'build 2026-07-01 · 47';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -322,8 +322,10 @@ function jobCard(j) {
     '</div>' +
     '<div class="card-bottom">' +
       stageChip(j.stage) + planChip(j.planningStatus) +
-      '<span class="chip mtg' + (j.preHeld ? ' on' : '') + '" title="Pre-job meeting ' + (j.preHeld ? 'held' : 'not held yet') + '">Pre ' + (j.preHeld ? '✓' : '–') + '</span>' +
-      '<span class="chip mtg' + (j.postHeld ? ' on' : '') + '" title="Post-job meeting ' + (j.postHeld ? 'held' : 'not held yet') + '">Post ' + (j.postHeld ? '✓' : '–') + '</span>' +
+      (j.category === 'service'
+        ? '<span class="chip mtg' + (j.preHeld ? ' on' : '') + '" title="Pre-job meeting ' + (j.preHeld ? 'held' : 'not held yet') + '">Pre ' + (j.preHeld ? '✓' : '–') + '</span>' +
+          '<span class="chip mtg' + (j.postHeld ? ' on' : '') + '" title="Post-job meeting ' + (j.postHeld ? 'held' : 'not held yet') + '">Post ' + (j.postHeld ? '✓' : '–') + '</span>'
+        : '') +
       (j.categoryOverridden ? '<span class="chip override">manual</span>' : '') +
       (j.archived ? '<span class="chip finished">finished</span>' : '') +
     '</div>' +
@@ -339,7 +341,7 @@ function jobCardCompact(j) {
     (j.planningStatus && j.planningStatus !== 'none' ? planChip(j.planningStatus) : '') +
     (j.archived ? '<span class="chip finished">finished</span>' : '') +
     stageChip(j.stage) +
-    '<span class="cc-mtg" title="Pre / Post meeting (✓ = held)">' + (j.preHeld ? '✓' : '·') + (j.postHeld ? '✓' : '·') + '</span>' +
+    (j.category === 'service' ? '<span class="cc-mtg" title="Pre / Post meeting (✓ = held)">' + (j.preHeld ? '✓' : '·') + (j.postHeld ? '✓' : '·') + '</span>' : '') +
     '<span class="cc-total">' + esc(fmtMoney(j.total, j.currency)) + '</span>' +
     '<button class="card-x" data-action="job-remove-card" data-key="' + esc(j.key) + '" title="Remove from board">✕</button>' +
   '</div>';
@@ -714,14 +716,16 @@ function renderModal() {
           '<button class="tab' + (state.modalTab === 'procedure' ? ' active' : '') + '" data-action="modal-tab" data-tab="procedure">Procedure</button>' +
           '<button class="tab' + (state.modalTab === 'travel' ? ' active' : '') + '" data-action="modal-tab" data-tab="travel">Travel' +
             (j.travelMode ? ' <span class="tab-dot">' + (j.travelMode === 'fly' ? '✈' : '🚗') + '</span>' : '') + '</button>' +
-          '<button class="tab' + (state.modalTab === 'meetings' ? ' active' : '') + '" data-action="modal-tab" data-tab="meetings">Meetings' +
-            (preH || postH ? ' <span class="tab-dot">' + (preH && postH ? '✓✓' : '✓') + '</span>' : '') + '</button>' +
+          (j.category === 'service'
+            ? '<button class="tab' + (state.modalTab === 'meetings' ? ' active' : '') + '" data-action="modal-tab" data-tab="meetings">Meetings' +
+                (preH || postH ? ' <span class="tab-dot">' + (preH && postH ? '✓✓' : '✓') + '</span>' : '') + '</button>'
+            : '') +
         '</div>' +
         '<div class="dialog-body">' +
           (state.modalTab === 'planning' ? planningTabHtml(d)
             : state.modalTab === 'procedure' ? procedureTabHtml(d)
             : state.modalTab === 'travel' ? travelTabHtml(d)
-            : state.modalTab === 'meetings' ? meetingsTabHtml(d)
+            : (state.modalTab === 'meetings' && j.category === 'service') ? meetingsTabHtml(d)
             : detailTabHtml(d)) +
         '</div>' +
       '</div>' +
