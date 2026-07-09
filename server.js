@@ -1355,6 +1355,8 @@ async function handleApi(req, res, u) {
         category: r.category, categoryOverridden: r.categoryOverridden,
         stage: l.stage || 'new', hidden: !!l.hidden,
         planningStatus: (l.planning && l.planning.status) || 'none',
+        preHeld: !!(l.meetings && l.meetings.pre && l.meetings.pre.held),
+        postHeld: !!(l.meetings && l.meetings.post && l.meetings.post.held),
         archived: done.archived, archivedHow: done.how
       };
     });
@@ -1415,10 +1417,24 @@ async function handleApi(req, res, u) {
     return ok(res, { removed });
   }
 
+  // ---- Post-job meetings still owed: jobs whose pre-job meeting was held but the
+  // post-job meeting hasn't been (works even after the job is invoiced / off the board).
+  if (p === '/api/meetings/todo' && method === 'GET') {
+    const local = readJson(FILES.jobs, {});
+    const todo = Object.keys(local).filter(k => {
+      const m = local[k] && local[k].meetings;
+      return m && m.pre && m.pre.held && !(m.post && m.post.held);
+    }).map(k => {
+      const m = local[k].meetings; const jb = m.job || {};
+      return { key: k, hwi: jb.hwi || '', customer: jb.customer || '', po: jb.po || '', preDate: (m.pre && m.pre.date) || '' };
+    }).sort((a, b) => String(b.preDate || '').localeCompare(String(a.preDate || '')));
+    return ok(res, { todo });
+  }
+
   // ---- single job + local edits
   if (p.startsWith('/api/job/')) {
     const rest = decodeURIComponent(p.slice('/api/job/'.length));
-    const m2 = rest.match(/^(.*)\/(planning|procedure|contacts|send|loadout-equipment)$/);
+    const m2 = rest.match(/^(.*)\/(planning|procedure|contacts|send|loadout-equipment|meetings)$/);
     const key = m2 ? m2[1] : rest;
     const sub = m2 ? m2[2] : '';
     const s = getSettings();
@@ -1645,6 +1661,33 @@ async function handleApi(req, res, u) {
       return ok(res, { saved: true, procedure });
     }
 
+    if (sub === 'meetings' && method === 'PUT') {
+      const body = await readBody(req);
+      const prev = (local[key] && local[key].meetings) || {};
+      const blk = (v, p) => {
+        v = v || {}; p = p || {};
+        return {
+          held: v.held !== undefined ? !!v.held : !!p.held,
+          date: v.date !== undefined ? String(v.date).slice(0, 20) : (p.date || ''),
+          notes: v.notes !== undefined ? String(v.notes).slice(0, 8000) : (p.notes || '')
+        };
+      };
+      const jb = body.job || {};
+      const meetings = {
+        pre: blk(body.pre, prev.pre),
+        post: blk(body.post, prev.post),
+        notes: body.notes !== undefined ? String(body.notes).slice(0, 8000) : (prev.notes || ''),
+        // a light snapshot so the "post-job to-do" list can show the job even after it leaves the board
+        job: (jb.hwi || jb.customer || jb.po)
+          ? { hwi: String(jb.hwi || ''), customer: String(jb.customer || ''), po: String(jb.po || '') }
+          : (prev.job || {}),
+        updatedAt: new Date().toISOString()
+      };
+      local[key] = Object.assign({}, local[key], { meetings });
+      writeJson(FILES.jobs, local);
+      return ok(res, { saved: true, meetings });
+    }
+
     if (!sub && method === 'PATCH') {
       const body = await readBody(req);
       const l = Object.assign({}, local[key]);
@@ -1697,6 +1740,7 @@ async function handleApi(req, res, u) {
         },
         planning: l.planning || null,
         procedure: l.procedure ? Object.assign({}, l.procedure, { photos: await photosWithUrls(l.procedure.photos) }) : null,
+        meetings: l.meetings || null,
         zoho: { dc: s.dc, orgId: s.orgId }
       });
     }

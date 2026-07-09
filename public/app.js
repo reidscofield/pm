@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-01 · 45';
+const BUILD = 'build 2026-07-01 · 46';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -233,6 +233,7 @@ async function loadJobs() {
   const j = await api('GET', '/api/jobs');
   state.jobs = j.jobs || [];
   state.meta = j;
+  try { const t = await api('GET', '/api/meetings/todo'); state.mtgTodo = t.todo || []; } catch (e) { state.mtgTodo = state.mtgTodo || []; }
   updateSyncStatus();
 }
 async function loadAll() {
@@ -321,6 +322,8 @@ function jobCard(j) {
     '</div>' +
     '<div class="card-bottom">' +
       stageChip(j.stage) + planChip(j.planningStatus) +
+      '<span class="chip mtg' + (j.preHeld ? ' on' : '') + '" title="Pre-job meeting ' + (j.preHeld ? 'held' : 'not held yet') + '">Pre ' + (j.preHeld ? '✓' : '–') + '</span>' +
+      '<span class="chip mtg' + (j.postHeld ? ' on' : '') + '" title="Post-job meeting ' + (j.postHeld ? 'held' : 'not held yet') + '">Post ' + (j.postHeld ? '✓' : '–') + '</span>' +
       (j.categoryOverridden ? '<span class="chip override">manual</span>' : '') +
       (j.archived ? '<span class="chip finished">finished</span>' : '') +
     '</div>' +
@@ -336,6 +339,7 @@ function jobCardCompact(j) {
     (j.planningStatus && j.planningStatus !== 'none' ? planChip(j.planningStatus) : '') +
     (j.archived ? '<span class="chip finished">finished</span>' : '') +
     stageChip(j.stage) +
+    '<span class="cc-mtg" title="Pre / Post meeting (✓ = held)">' + (j.preHeld ? '✓' : '·') + (j.postHeld ? '✓' : '·') + '</span>' +
     '<span class="cc-total">' + esc(fmtMoney(j.total, j.currency)) + '</span>' +
     '<button class="card-x" data-action="job-remove-card" data-key="' + esc(j.key) + '" title="Remove from board">✕</button>' +
   '</div>';
@@ -375,6 +379,7 @@ function renderDashboard() {
       '</select>' +
       '<label class="chk"><input type="checkbox" data-change="show-hidden"' + (state.showHidden ? ' checked' : '') + '> show hidden</label>' +
       '<label class="chk"><input type="checkbox" data-change="compact"' + (state.compact ? ' checked' : '') + '> compact</label>' +
+      '<button class="btn small" data-action="open-mtg-todo" title="Jobs still needing a post-job meeting">📋 Post-job to-do' + ((state.mtgTodo && state.mtgTodo.length) ? ' <span class="todo-count">' + state.mtgTodo.length + '</span>' : '') + '</button>' +
       '<button class="btn small" data-action="open-removed" title="Jobs removed from the board — restore them here">🗑 Recently deleted</button>' +
       '<span class="muted" style="margin-left:auto;font-size:13px">' + filteredJobs().length + ' jobs</span>' +
     '</div>' +
@@ -393,6 +398,7 @@ async function openJob(key) {
     state.procedureSetup = (state.procedureDraft && state.procedureDraft.setup)
       ? Object.assign(defaultSetup(d.job, d.planning), state.procedureDraft.setup)
       : defaultSetup(d.job, d.planning);
+    state.meetingsDraft = d.meetings ? JSON.parse(JSON.stringify(d.meetings)) : { pre: {}, post: {}, notes: '' };
     state.procSendConfirm = null;
     state.modalTab = (d.planning && d.planning.status !== 'none') ? 'planning' : 'details';
     state.contacts = null; state.contactsError = '';
@@ -421,7 +427,8 @@ function loadContacts(key) {
 function closeModal() {
   if (state.modalTab === 'planning' && state.planningDraft) collectPlanning(); // keep typed text in memory
   else if (state.modalTab === 'procedure' && state.procedureDraft) collectProcedure();
-  state.open = null; state.detail = null; state.planningDraft = null; state.procedureDraft = null; state.procSendConfirm = null;
+  else if (state.modalTab === 'meetings') collectMeetings();
+  state.open = null; state.detail = null; state.planningDraft = null; state.procedureDraft = null; state.meetingsDraft = null; state.procSendConfirm = null;
   $('#modal').innerHTML = '';
   if (state.view === 'dashboard') renderDashboard();
 }
@@ -611,10 +618,88 @@ async function openRemoved() {
 }
 function closeRemoved() { const h = document.getElementById('removedModal'); if (h) h.innerHTML = ''; }
 
+// ---- Meetings tab: pre-job + post-job meeting tracking + notes ----
+function meetingsTabHtml(d) {
+  const m = state.meetingsDraft || { pre: {}, post: {}, notes: '' };
+  const block = (key, title, hint) => {
+    const b = m[key] || {};
+    return '<div class="mtg-block' + (b.held ? ' held' : '') + '">' +
+      '<div class="mtg-top">' +
+        '<label class="chk"><input type="checkbox" id="mtg' + key + 'Held" data-change="mtg-held"' + (b.held ? ' checked' : '') + '> <b>' + title + '</b> — held</label>' +
+        '<span class="mtg-date"><label>on</label><input id="mtg' + key + 'Date" type="date" value="' + esc(b.date || '') + '"></span>' +
+      '</div>' +
+      '<textarea id="mtg' + key + 'Notes" rows="4" placeholder="' + esc(hint) + '">' + esc(b.notes || '') + '</textarea>' +
+    '</div>';
+  };
+  return '<div class="mtg">' +
+    '<p class="muted" style="line-height:1.5;margin-bottom:6px">Track the meetings for this job — tick <b>held</b> and it stamps the date. A job with a pre-job meeting but no post-job one shows under <b>📋 Post-job to-do</b> on the dashboard.</p>' +
+    block('pre', 'Pre-job meeting', 'Planning, coordination, safety brief — who attended, key points, action items…') +
+    block('post', 'Post-job meeting', 'Debrief / lessons learned — what went well, what to improve, follow-ups…') +
+    '<label style="margin-top:10px">General job notes</label>' +
+    '<textarea id="mtgNotes" rows="4" placeholder="Anything else worth noting about this job…">' + esc(m.notes || '') + '</textarea>' +
+    '<div class="plan-actions" style="margin-top:12px"><button class="btn primary" data-action="mtg-save">Save</button></div>' +
+  '</div>';
+}
+function collectMeetings() {
+  const m = state.meetingsDraft || (state.meetingsDraft = { pre: {}, post: {}, notes: '' });
+  if (!document.getElementById('mtgpreHeld')) return m;
+  const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const c = id => { const el = document.getElementById(id); return el ? el.checked : false; };
+  m.pre = { held: c('mtgpreHeld'), date: g('mtgpreDate'), notes: g('mtgpreNotes') };
+  m.post = { held: c('mtgpostHeld'), date: g('mtgpostDate'), notes: g('mtgpostNotes') };
+  m.notes = g('mtgNotes');
+  ['pre', 'post'].forEach(k => { if (m[k].held && !m[k].date) m[k].date = new Date().toISOString().slice(0, 10); });
+  return m;
+}
+async function saveMeetings(silent) {
+  const m = collectMeetings();
+  if (!m || !state.open) return;
+  const j = state.detail.job;
+  try {
+    const r = await api('PUT', '/api/job/' + encodeURIComponent(state.open) + '/meetings',
+      { pre: m.pre, post: m.post, notes: m.notes, job: { hwi: j.hwi, customer: j.customer, po: j.reference } });
+    state.meetingsDraft = JSON.parse(JSON.stringify(r.meetings));
+    state.detail.meetings = r.meetings;
+    const row = state.jobs.find(x => x.key === state.open);
+    if (row) { row.preHeld = !!(r.meetings.pre && r.meetings.pre.held); row.postHeld = !!(r.meetings.post && r.meetings.post.held); }
+    renderModal();
+    if (!silent) toast('Meetings saved.');
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---- Post-job meetings still owed (dashboard panel) ----
+function mtgTodoOverlayHtml() {
+  const list = state.mtgTodo || [];
+  const rows = list.length ? list.map(t =>
+    '<div class="rm-row">' +
+      '<div class="rm-info"><b>' + esc(t.hwi || '(no HWI)') + '</b> · ' + esc(t.customer || '(no customer)') +
+        '<div class="muted" style="font-size:12px">PO ' + esc(t.po || '—') + (t.preDate ? ' · pre-job meeting ' + esc(t.preDate) : '') + '</div></div>' +
+      '<button class="btn small" data-action="mtg-todo-open" data-key="' + esc(t.key) + '">Open</button>' +
+    '</div>'
+  ).join('') : '<div class="muted" style="padding:14px 2px">🎉 No post-job meetings outstanding.<br>A job lands here once its pre-job meeting is held but the post-job one isn’t.</div>';
+  return '<div class="overlay" data-action="mtg-todo-bg">' +
+    '<div class="dialog" style="max-width:560px">' +
+      '<div class="dialog-head"><div><h2>📋 Post-job meetings to do</h2>' +
+        '<div class="sub">' + list.length + ' job' + (list.length === 1 ? '' : 's') + ' awaiting a post-job meeting</div></div>' +
+        '<button class="btn-icon dialog-close" data-action="mtg-todo-close" title="Close">✕</button></div>' +
+      '<div class="dialog-body">' + rows + '</div>' +
+    '</div>' +
+  '</div>';
+}
+async function openMtgTodo() {
+  try { const r = await api('GET', '/api/meetings/todo'); state.mtgTodo = r.todo || []; } catch (e) { toast(e.message, true); return; }
+  let host = document.getElementById('mtgTodoModal');
+  if (!host) { host = document.createElement('div'); host.id = 'mtgTodoModal'; document.body.appendChild(host); }
+  host.innerHTML = mtgTodoOverlayHtml();
+}
+function closeMtgTodo() { const h = document.getElementById('mtgTodoModal'); if (h) h.innerHTML = ''; }
+
 function renderModal() {
   const d = state.detail;
   if (!d) { $('#modal').innerHTML = ''; return; }
   const j = d.job;
+  const mtg = d.meetings || {};
+  const preH = !!(mtg.pre && mtg.pre.held), postH = !!(mtg.post && mtg.post.held);
   $('#modal').innerHTML =
     '<div class="overlay" data-action="overlay-close">' +
       '<div class="dialog">' +
@@ -629,11 +714,14 @@ function renderModal() {
           '<button class="tab' + (state.modalTab === 'procedure' ? ' active' : '') + '" data-action="modal-tab" data-tab="procedure">Procedure</button>' +
           '<button class="tab' + (state.modalTab === 'travel' ? ' active' : '') + '" data-action="modal-tab" data-tab="travel">Travel' +
             (j.travelMode ? ' <span class="tab-dot">' + (j.travelMode === 'fly' ? '✈' : '🚗') + '</span>' : '') + '</button>' +
+          '<button class="tab' + (state.modalTab === 'meetings' ? ' active' : '') + '" data-action="modal-tab" data-tab="meetings">Meetings' +
+            (preH || postH ? ' <span class="tab-dot">' + (preH && postH ? '✓✓' : '✓') + '</span>' : '') + '</button>' +
         '</div>' +
         '<div class="dialog-body">' +
           (state.modalTab === 'planning' ? planningTabHtml(d)
             : state.modalTab === 'procedure' ? procedureTabHtml(d)
             : state.modalTab === 'travel' ? travelTabHtml(d)
+            : state.modalTab === 'meetings' ? meetingsTabHtml(d)
             : detailTabHtml(d)) +
         '</div>' +
       '</div>' +
@@ -2082,6 +2170,7 @@ document.addEventListener('click', async (e) => {
     case 'modal-tab': {
       if (state.modalTab === 'planning') collectPlanning();
       else if (state.modalTab === 'procedure') collectProcedure();
+      else if (state.modalTab === 'meetings') collectMeetings();
       state.procSendConfirm = null;
       state.modalTab = el.dataset.tab;
       renderModal();
@@ -2303,6 +2392,16 @@ document.addEventListener('click', async (e) => {
         await loadJobs(); render();   // refresh the board underneath
         toast('Restored to the board.');
       } catch (err) { toast(err.message, true); }
+      return;
+    }
+    case 'mtg-save': await saveMeetings(); return;
+    case 'open-mtg-todo': await openMtgTodo(); return;
+    case 'mtg-todo-close': closeMtgTodo(); return;
+    case 'mtg-todo-bg': if (e.target === el) closeMtgTodo(); return;
+    case 'mtg-todo-open': {
+      const key = el.dataset.key; closeMtgTodo();
+      await openJob(key);
+      if (state.detail) { state.modalTab = 'meetings'; renderModal(); }
       return;
     }
     case 'tpl-add': collectTemplates(); state.templates.questions.push({ id: 'q' + Math.random().toString(36).slice(2, 8), text: '' }); renderTemplates(); return;
@@ -2531,6 +2630,12 @@ document.addEventListener('change', async (e) => {
     collectSetup();
     const panel = $('#setupPanel');
     if (panel && state.detail) panel.outerHTML = setupPanelHtml(state.procedureSetup, state.detail.job);
+    return;
+  }
+  if (what === 'mtg-held') {
+    const which = e.target.id === 'mtgpreHeld' ? 'pre' : 'post';
+    const dateEl = document.getElementById('mtg' + which + 'Date');
+    if (e.target.checked && dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
     return;
   }
   if (what === 'draw-file') {

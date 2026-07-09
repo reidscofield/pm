@@ -171,6 +171,18 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 .card:hover .card-x { opacity: .7; }
 .card.compact .card-x { position: static; flex: none; width: 18px; height: 18px; opacity: .4; }
 .card.compact:hover .card-x { opacity: .7; }
+
+/* Meeting tracking */
+.chip.mtg { background: #eef1f4; color: var(--muted); }
+.chip.mtg.on { background: #e4f4ea; color: #1a7f45; }
+.cc-mtg { font-size: 12px; letter-spacing: 1px; color: var(--muted); flex: none; white-space: nowrap; }
+.todo-count { display: inline-flex; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #c0392b; color: #fff; font-size: 11px; font-weight: 700; align-items: center; justify-content: center; margin-left: 3px; }
+.mtg-block { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: var(--card, #fff); }
+.mtg-block.held { border-left: 3px solid #1a7f45; }
+.mtg-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.mtg-date { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; }
+.mtg-date input { width: auto; padding: 3px 6px; }
+.mtg-date label { display: inline; margin: 0; }
 .card:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(16, 42, 67, .12), 0 8px 24px rgba(16, 42, 67, .08); }
 .col-rental .card { border-left-color: var(--rental); }
 .col-service .card { border-left-color: var(--service); }
