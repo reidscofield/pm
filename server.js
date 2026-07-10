@@ -302,7 +302,9 @@ function completedState(b, l, hwi, invoicedHwis, idx) {
     (hk.length >= 4 && invoicedHwis.has(hk)) ||                         // its HWI was invoiced in Zoho
     (hwi ? !!(idx.byHwi.get(hk) || {}).invoiced : false);              // the Lead List says it's billed
   if (arch.archived) return { archived: true, how: arch.how };
-  if (invoiced) return { archived: true, how: 'invoiced' };
+  // Multi-invoice jobs (billed in stages) stay on the board through their invoicing —
+  // one invoice doesn't mean done. The PM removes them (or clears the flag) when finished.
+  if (invoiced && !l.multiInvoice) return { archived: true, how: 'invoiced' };
   return { archived: false, how: arch.how };
 }
 
@@ -1045,12 +1047,18 @@ function leadAsJob(r, demo) {
 function openLeadJobs(s) {
   try {
     const c = computeLeads(s);
+    const local = readJson(FILES.jobs, {});
     // A dashboard card must be a real, active job: it carries a job number (HWI)
     // AND a PO (the customer has committed), and it hasn't been invoiced yet. Leads
     // with no QuoteNum are raw inquiries; leads with no PO are quotes not yet won —
-    // neither gets a card. (Demo leads are exempt so demo mode still populates.)
+    // neither gets a card. EXCEPTION: a multi-invoice job stays on the board through
+    // its invoicing even once the Lead List/PO reads "completed". (Demo leads exempt.)
     return c.leads
-      .filter(l => !l.completed && (c.demo || (l.hwi && String(l.po || '').trim() !== '')))
+      .filter(l => {
+        if (!(c.demo || (l.hwi && String(l.po || '').trim() !== ''))) return false;
+        const multi = !!(local['lead:' + l.id] && local['lead:' + l.id].multiInvoice);
+        return !l.completed || multi;
+      })
       .map(l => leadAsJob(l, c.demo));
   } catch (e) { return []; }
 }
@@ -1357,6 +1365,7 @@ async function handleApi(req, res, u) {
         planningStatus: (l.planning && l.planning.status) || 'none',
         preHeld: !!(l.meetings && l.meetings.pre && l.meetings.pre.held),
         postHeld: !!(l.meetings && l.meetings.post && l.meetings.post.held),
+        multiInvoice: !!l.multiInvoice,
         archived: done.archived, archivedHow: done.how
       };
     });
@@ -1721,6 +1730,7 @@ async function handleApi(req, res, u) {
         else l.wll = n;
       }
       if (body.wllUnit !== undefined) l.wllUnit = String(body.wllUnit).slice(0, 16);
+      if (body.multiInvoice !== undefined) { if (body.multiInvoice) l.multiInvoice = true; else delete l.multiInvoice; }
       if (body.archiveOverride !== undefined) {
         if (body.archiveOverride === 'archived' || body.archiveOverride === 'active') l.archiveOverride = body.archiveOverride;
         else { delete l.archiveOverride; delete l.purged; }   // clearing = restore to the board
@@ -1762,6 +1772,7 @@ async function handleApi(req, res, u) {
           matchedRule: r.categoryRule, stage: l.stage || 'new', hidden: !!l.hidden,
           wll: (l.wll !== undefined ? l.wll : null), wllUnit: l.wllUnit || 't',
           travelMode: (hwi ? (travelModes[hwiKey(hwi)] || null) : null),
+          multiInvoice: !!l.multiInvoice,
           archived: done.archived, archivedHow: done.how
         },
         planning: l.planning || null,

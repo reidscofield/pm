@@ -181,6 +181,7 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 /* Meeting tracking */
 .chip.mtg { background: #eef1f4; color: var(--muted); }
 .chip.mtg.on { background: #e4f4ea; color: #1a7f45; }
+.chip.multi { background: #efe7fb; color: #6b3fa0; }
 .cc-mtg { font-size: 12px; letter-spacing: 1px; color: var(--muted); flex: none; white-space: nowrap; }
 .todo-count { display: inline-flex; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #c0392b; color: #fff; font-size: 11px; font-weight: 700; align-items: center; justify-content: center; margin-left: 3px; }
 .mtg-block { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; background: var(--card, #fff); }

@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-01 · 50';
+const BUILD = 'build 2026-07-01 · 52';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -326,6 +326,7 @@ function jobCard(j) {
         ? '<span class="chip mtg' + (j.preHeld ? ' on' : '') + '" title="Pre-job meeting ' + (j.preHeld ? 'held' : 'not held yet') + '">Pre ' + (j.preHeld ? '✓' : '–') + '</span>' +
           '<span class="chip mtg' + (j.postHeld ? ' on' : '') + '" title="Post-job meeting ' + (j.postHeld ? 'held' : 'not held yet') + '">Post ' + (j.postHeld ? '✓' : '–') + '</span>'
         : '') +
+      (j.multiInvoice ? '<span class="chip multi" title="Multi-invoice job — stays on the board through staged billing">multi-invoice</span>' : '') +
       (j.categoryOverridden ? '<span class="chip override">manual</span>' : '') +
       (j.archived ? '<span class="chip finished">finished</span>' : '') +
     '</div>' +
@@ -469,6 +470,9 @@ function detailTabHtml(d) {
       '<select data-change="job-stage" style="width:auto;padding:4px 8px;font-size:13px">' +
         STAGES.map(([v, l]) => '<option value="' + v + '"' + (j.stage === v ? ' selected' : '') + '>' + l + '</option>').join('') +
       '</select></div></div>' +
+    '<div style="grid-column:1/-1"><div class="dt">Invoicing</div><div class="dd">' +
+      '<label class="chk"><input type="checkbox" data-change="job-multi"' + (j.multiInvoice ? ' checked' : '') + '> <b>Multi-invoice job</b> — billed in stages; keep it on the board even after an invoice goes out</label>' +
+    '</div></div>' +
     '<div><div class="dt">WLL · entered internally</div><div class="dd">' +
       '<input id="jobWll" data-change="job-wll" type="number" step="any" min="0" placeholder="—" style="width:78px;padding:4px 8px;font-size:13px" value="' + esc(j.wll == null ? '' : j.wll) + '"> ' +
       '<select id="jobWllUnit" data-change="job-wll" style="width:auto;padding:4px 6px;font-size:13px">' +
@@ -2817,6 +2821,17 @@ document.addEventListener('change', async (e) => {
       const row = state.jobs.find(x => x.key === j.key);
       if (row) row.stage = el.value;
       toast('Stage updated.');
+    } catch (err) { toast(err.message, true); }
+  }
+  if (what === 'job-multi' && state.detail) {
+    const j = state.detail.job;
+    try {
+      await api('PATCH', '/api/job/' + encodeURIComponent(j.key), { multiInvoice: el.checked });
+      j.multiInvoice = el.checked;
+      const row = state.jobs.find(x => x.key === j.key);
+      if (row) row.multiInvoice = el.checked;
+      await loadJobs(); render();   // board membership can change (an invoiced multi-invoice job stays / leaves)
+      toast(el.checked ? 'Marked multi-invoice — it stays on the board through invoicing.' : 'No longer marked multi-invoice.');
     } catch (err) { toast(err.message, true); }
   }
 
