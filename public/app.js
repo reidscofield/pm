@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-01 · 47';
+const BUILD = 'build 2026-07-01 · 50';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -596,17 +596,29 @@ function removedOverlayHtml() {
   const list = state.removed || [];
   const rows = list.length ? list.map(r =>
     '<div class="rm-row">' +
+      '<label class="rm-check"><input type="checkbox" data-rmsel value="' + esc(r.key) + '"></label>' +
       '<div class="rm-info"><b>' + esc(r.hwi || '(no HWI)') + '</b> · ' + esc(r.customer || '(no customer)') +
         '<div class="muted" style="font-size:12px">PO ' + esc(r.po || '—') +
           (r.removedAt ? ' · removed ' + esc(new Date(r.removedAt).toLocaleDateString()) : '') + '</div></div>' +
-      '<button class="btn small" data-action="removed-restore" data-key="' + esc(r.key) + '">↩ Restore</button>' +
+      '<div class="rm-actions">' +
+        '<button class="btn small" data-action="removed-restore" data-key="' + esc(r.key) + '">↩ Restore</button>' +
+        '<button class="btn small danger" data-action="removed-purge" data-key="' + esc(r.key) + '" title="Delete permanently — won’t appear on the board or here again">🗑 Delete</button>' +
+      '</div>' +
     '</div>'
   ).join('') : '<div class="muted" style="padding:14px 2px">Nothing removed yet. Open a job and use <b>🗑 Remove from board</b> to send oddball jobs here.</div>';
+  const bar = list.length
+    ? '<div class="rm-bar">' +
+        '<label class="chk"><input type="checkbox" id="rmSelAll" data-change="removed-selall"> Select all</label>' +
+        '<button class="btn small" data-action="removed-del-selected" style="margin-left:auto">Delete selected</button>' +
+        '<button class="btn small danger" data-action="removed-del-all">Delete all</button>' +
+      '</div>'
+    : '';
   return '<div class="overlay" data-action="removed-bg">' +
     '<div class="dialog" style="max-width:560px">' +
       '<div class="dialog-head"><div><h2>🗑 Recently deleted</h2>' +
-        '<div class="sub">' + list.length + ' removed · restore any job back to the board</div></div>' +
+        '<div class="sub">' + list.length + ' removed · restore, or permanently delete</div></div>' +
         '<button class="btn-icon dialog-close" data-action="removed-close" title="Close">✕</button></div>' +
+      bar +
       '<div class="dialog-body">' + rows + '</div>' +
     '</div>' +
   '</div>';
@@ -946,6 +958,40 @@ function drawingsTabHtml(p) {
       '<span class="muted" style="font-size:12px">PDF only, up to 4 MB each.</span>' +
     '</div>' +
   '</div>';
+}
+
+// Deep link to the Hydro-Wates Rigging Planner (our own Vercel app). ?job=<HWI>
+// opens that job's plan or creates a new one. Update this URL if the planner is renamed.
+const RIGGING_PLANNER_URL = 'https://rigging-planner-gamma.vercel.app/';
+function riggingPlannerLinkHtml(j) {
+  const hwi = (j && j.hwi) ? String(j.hwi) : '';
+  const url = RIGGING_PLANNER_URL + (hwi ? '?job=' + encodeURIComponent(hwi) : '');
+  return '<div class="rig-plan">' +
+    '<a class="btn small" href="' + esc(url) + '" target="_blank" rel="noopener">🏗 Open in Rigging Planner</a>' +
+    '<span class="muted" style="font-size:12px">' +
+      (hwi ? 'Opens <b>' + esc(hwi) + '</b>’s plan (or starts a new one)' : 'Add an HWI to this job to link its plan') +
+      ' — then print → Save as PDF and drop it below.</span>' +
+  '</div>';
+}
+
+// Upload a PDF drawing to the current job's procedure — shared by the file picker and drag-drop.
+async function uploadDrawingFile(file) {
+  if (!file || !state.open) return;
+  if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { toast('Please choose a PDF file.', true); return; }
+  if (file.size > 4 * 1024 * 1024) { toast('That PDF is over the 4 MB limit — please attach a smaller file.', true); return; }
+  if ($('#procObjective')) collectProcedure();
+  toast('Uploading ' + file.name + '…');
+  try {
+    const opt = { method: 'POST', headers: { 'Content-Type': 'application/pdf', 'x-filename': file.name }, body: file };
+    if (authToken) opt.headers['Authorization'] = 'Bearer ' + authToken;
+    const resp = await fetch('/api/job/' + encodeURIComponent(state.open) + '/drawings', opt);
+    const j = await resp.json().catch(() => ({}));
+    if (resp.status === 401) { renderLogin('Your session has expired — please sign in again.'); return; }
+    if (!resp.ok) throw new Error(j.error || ('Upload failed (' + resp.status + ')'));
+    if (state.procedureDraft) state.procedureDraft.drawings = j.drawings;
+    renderModal();
+    toast('Attached ' + file.name + '.');
+  } catch (err) { toast(err.message || 'Upload failed.', true); }
 }
 
 // Site photos attached to the procedure. Thumbnails need a signed URL (server adds
@@ -1363,6 +1409,7 @@ function procedureTabHtml(d) {
     '<label style="margin-top:8px">6.3 Load test execution steps <span class="muted">(one per line)</span></label>' + ta('procExec', lines(p.executionSteps), rowsFor(p.executionSteps)) +
     '<label style="margin-top:8px">6.4 Information logging</label>' + ta('procLogging', p.logging, 3) +
     '<label style="margin-top:8px">7. Project drawings <span class="muted">(PDF rigging drawings)</span></label>' +
+    riggingPlannerLinkHtml(d.job) +
     drawingsTabHtml(p) +
     '<label style="margin-top:8px">8. Site photos <span class="muted">(JPG/PNG — shown in the printed procedure)</span></label>' +
     photosTabHtml(p) +
@@ -2398,6 +2445,37 @@ document.addEventListener('click', async (e) => {
       } catch (err) { toast(err.message, true); }
       return;
     }
+    case 'removed-purge': {
+      if (!confirm('Permanently delete this job?\n\nIt won’t appear on the board or in Recently deleted anymore, and can’t be restored from here.')) return;
+      try {
+        await api('PATCH', '/api/job/' + encodeURIComponent(el.dataset.key), { purge: true });
+        await openRemoved();   // refresh the panel (it drops off the list)
+        toast('Permanently removed.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    case 'removed-del-selected': {
+      const keys = $$('[data-rmsel]').filter(c => c.checked).map(c => c.value);
+      if (!keys.length) { toast('Tick the jobs you want to delete first.', true); return; }
+      if (!confirm('Permanently delete ' + keys.length + ' selected job' + (keys.length === 1 ? '' : 's') + '?\n\nThey won’t appear on the board or in Recently deleted anymore.')) return;
+      try {
+        const r = await api('POST', '/api/removed/purge', { keys });
+        await openRemoved();
+        toast('Permanently removed ' + (r.purged != null ? r.purged : keys.length) + '.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
+    case 'removed-del-all': {
+      const keys = (state.removed || []).map(x => x.key);
+      if (!keys.length) return;
+      if (!confirm('Permanently delete ALL ' + keys.length + ' job' + (keys.length === 1 ? '' : 's') + ' in Recently deleted?\n\nThis clears the whole list and can’t be undone from here.')) return;
+      try {
+        const r = await api('POST', '/api/removed/purge', { keys });
+        await openRemoved();
+        toast('Permanently removed ' + (r.purged != null ? r.purged : keys.length) + '.');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
     case 'mtg-save': await saveMeetings(); return;
     case 'open-mtg-todo': await openMtgTodo(); return;
     case 'mtg-todo-close': closeMtgTodo(); return;
@@ -2642,25 +2720,15 @@ document.addEventListener('change', async (e) => {
     if (e.target.checked && dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
     return;
   }
+  if (what === 'removed-selall') {
+    const on = e.target.checked;
+    $$('[data-rmsel]').forEach(c => { c.checked = on; });
+    return;
+  }
   if (what === 'draw-file') {
     const file = el.files && el.files[0];
     el.value = '';                                  // let the same file be re-picked later
-    if (!file) return;
-    if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { toast('Please choose a PDF file.', true); return; }
-    if (file.size > 4 * 1024 * 1024) { toast('That PDF is over the 4 MB limit — please attach a smaller file.', true); return; }
-    if ($('#procObjective')) collectProcedure();    // keep any in-progress edits before re-render
-    toast('Uploading ' + file.name + '…');
-    try {
-      const opt = { method: 'POST', headers: { 'Content-Type': 'application/pdf', 'x-filename': file.name }, body: file };
-      if (authToken) opt.headers['Authorization'] = 'Bearer ' + authToken;
-      const resp = await fetch('/api/job/' + encodeURIComponent(state.open) + '/drawings', opt);
-      const j = await resp.json().catch(() => ({}));
-      if (resp.status === 401) { renderLogin('Your session has expired — please sign in again.'); return; }
-      if (!resp.ok) throw new Error(j.error || ('Upload failed (' + resp.status + ')'));
-      if (state.procedureDraft) state.procedureDraft.drawings = j.drawings;
-      renderModal();
-      toast('Attached ' + file.name + '.');
-    } catch (err) { toast(err.message || 'Upload failed.', true); }
+    await uploadDrawingFile(file);
     return;
   }
   if (what === 'photo-file') {
@@ -2797,6 +2865,23 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.open) closeModal();
+});
+
+// Drag-and-drop a PDF straight onto the drawings box to attach it.
+document.addEventListener('dragover', (e) => {
+  const box = e.target.closest && e.target.closest('.draw-box');
+  if (box) { e.preventDefault(); box.classList.add('drag'); }
+});
+document.addEventListener('dragleave', (e) => {
+  const box = e.target.closest && e.target.closest('.draw-box');
+  if (box && !box.contains(e.relatedTarget)) box.classList.remove('drag');
+});
+document.addEventListener('drop', async (e) => {
+  const box = e.target.closest && e.target.closest('.draw-box');
+  if (!box) return;
+  e.preventDefault(); box.classList.remove('drag');
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (file) await uploadDrawingFile(file);
 });
 
 /* ---------------- boot ---------------- */

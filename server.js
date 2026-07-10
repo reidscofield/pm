@@ -1404,7 +1404,7 @@ async function handleApi(req, res, u) {
   if (p === '/api/removed' && method === 'GET') {
     const s = getSettings();
     const local = readJson(FILES.jobs, {});
-    const keys = Object.keys(local).filter(k => local[k] && local[k].archiveOverride === 'archived');
+    const keys = Object.keys(local).filter(k => local[k] && local[k].archiveOverride === 'archived' && !local[k].purged);
     if (!keys.length) return ok(res, { removed: [] });
     const byKey = new Map(currentJobs(s).concat(openLeadJobs(s)).map(b => [b.key, b]));
     const idx = leadIndex(readJson(FILES.cache, {}));
@@ -1415,6 +1415,24 @@ async function handleApi(req, res, u) {
       return { key: k, hwi: r.hwi, customer: b.customer || '', po: b.reference || '', total: b.total, currency: b.currency, category: r.category, removedAt: l.removedAt || null };
     }).sort((a, bb) => String(bb.removedAt || '').localeCompare(String(a.removedAt || '')));
     return ok(res, { removed });
+  }
+
+  // ---- Bulk permanently-delete from Recently deleted. Body: { keys: [...] }.
+  if (p === '/api/removed/purge' && method === 'POST') {
+    const body = await readBody(req);
+    const local = readJson(FILES.jobs, {});
+    const keys = Array.isArray(body.keys) ? body.keys : [];
+    let n = 0;
+    for (const k of keys) {
+      const l = local[k];
+      if (l && l.archiveOverride === 'archived' && !l.purged) {
+        l.purged = true;
+        if (!l.removedAt) l.removedAt = new Date().toISOString();
+        n++;
+      }
+    }
+    if (n) writeJson(FILES.jobs, local);
+    return ok(res, { purged: n });
   }
 
   // ---- Post-job meetings still owed: jobs whose pre-job meeting was held but the
@@ -1705,9 +1723,17 @@ async function handleApi(req, res, u) {
       if (body.wllUnit !== undefined) l.wllUnit = String(body.wllUnit).slice(0, 16);
       if (body.archiveOverride !== undefined) {
         if (body.archiveOverride === 'archived' || body.archiveOverride === 'active') l.archiveOverride = body.archiveOverride;
-        else delete l.archiveOverride;
+        else { delete l.archiveOverride; delete l.purged; }   // clearing = restore to the board
         if (body.archiveOverride === 'archived') l.removedAt = new Date().toISOString();   // stamp for the Recently deleted list
         else delete l.removedAt;
+      }
+      // Permanently drop a removed job out of "Recently deleted": stays off the board
+      // (archived) but no longer restorable from the list. The underlying SharePoint/
+      // Zoho record can't be deleted from here — this just hides it everywhere.
+      if (body.purge === true) {
+        l.archiveOverride = 'archived';
+        l.purged = true;
+        if (!l.removedAt) l.removedAt = new Date().toISOString();
       }
       local[key] = l;
       writeJson(FILES.jobs, local);
