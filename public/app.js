@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 64';
+const BUILD = 'build 2026-07-14 · 65';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -480,7 +480,6 @@ function renderDashboard() {
       '</select>' +
       '<label class="chk"><input type="checkbox" data-change="show-hidden"' + (state.showHidden ? ' checked' : '') + '> show hidden</label>' +
       '<label class="chk"><input type="checkbox" data-change="compact"' + (state.compact ? ' checked' : '') + '> compact</label>' +
-      '<button class="btn small" data-action="open-mtg-todo" title="Jobs still needing a post-job meeting">📋 Post-job to-do' + ((state.mtgTodo && state.mtgTodo.length) ? ' <span class="todo-count">' + state.mtgTodo.length + '</span>' : '') + '</button>' +
       '<button class="btn small" data-action="open-removed" title="Jobs removed from the board — restore them here">🗑 Recently deleted</button>' +
       '<span class="muted" style="margin-left:auto;font-size:13px">' + filteredJobs().length + ' jobs</span>' +
     '</div>' +
