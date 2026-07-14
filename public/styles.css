@@ -167,6 +167,25 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 .col-service .col-head { color: var(--service); } .col-service .count { background: var(--service); }
 .col-sales .col-head { color: var(--sales); }     .col-sales .count { background: var(--sales); }
 
+/* dashboard + post-job to-do side panel */
+.dash-body { display: flex; gap: 18px; align-items: flex-start; }
+.dash-body > #cols { flex: 1 1 auto; min-width: 0; }
+.dash-side { flex: 0 0 300px; position: sticky; top: 74px; }
+.pjt-panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow); }
+.pjt-head { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 15px; color: var(--ink); }
+.pjt-sub { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 5px 0 10px; }
+.pjt-list { display: flex; flex-direction: column; gap: 6px; }
+.pjt-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; text-align: left; background: #f7fafd; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.pjt-item:hover { background: #eef4f9; border-color: #b9cee0; }
+.pjt-hwi { font-weight: 600; font-size: 13px; color: var(--brand); }
+.pjt-cust { font-size: 12.5px; color: var(--ink); }
+.pjt-date { font-size: 11.5px; color: var(--muted); }
+.pjt-empty { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+@media (max-width: 1100px) {
+  .dash-body { flex-direction: column; }
+  .dash-side { flex: none; width: 100%; position: static; }
+}
+
 .card {
   position: relative;
   background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);

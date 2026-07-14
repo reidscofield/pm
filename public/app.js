@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 63';
+const BUILD = 'build 2026-07-14 · 64';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -484,7 +484,10 @@ function renderDashboard() {
       '<button class="btn small" data-action="open-removed" title="Jobs removed from the board — restore them here">🗑 Recently deleted</button>' +
       '<span class="muted" style="margin-left:auto;font-size:13px">' + filteredJobs().length + ' jobs</span>' +
     '</div>' +
-    '<div id="cols">' + colsHtml() + '</div>';
+    '<div class="dash-body">' +
+      '<div id="cols">' + colsHtml() + '</div>' +
+      postJobSideHtml() +
+    '</div>';
 }
 
 /* ---------------- job modal ---------------- */
@@ -832,6 +835,11 @@ async function saveMeetings(silent) {
     state.detail.meetings = r.meetings;
     const row = state.jobs.find(x => x.key === state.open);
     if (row) { row.preHeld = !!(r.meetings.pre && r.meetings.pre.held); row.postHeld = !!(r.meetings.post && r.meetings.post.held); }
+    // Refresh the post-job to-do list and update the dashboard side panel live (it sits behind the modal).
+    try {
+      const t = await api('GET', '/api/meetings/todo'); state.mtgTodo = t.todo || [];
+      const side = document.querySelector('.dash-side'); if (side) side.outerHTML = postJobSideHtml();
+    } catch (e) {}
     renderModal();
     if (!silent) toast('Meetings saved.');
   } catch (e) { toast(e.message, true); }
@@ -863,6 +871,25 @@ async function openMtgTodo() {
   host.innerHTML = mtgTodoOverlayHtml();
 }
 function closeMtgTodo() { const h = document.getElementById('mtgTodoModal'); if (h) h.innerHTML = ''; }
+
+// Persistent side panel on the dashboard: Service jobs whose pre-job meeting is
+// held but the post-job (R&R) one isn't. Clicking an item opens that job's Meetings tab.
+function postJobSideHtml() {
+  const list = state.mtgTodo || [];
+  const items = list.length
+    ? list.map(t =>
+        '<button class="pjt-item" data-action="mtg-todo-open" data-key="' + esc(t.key) + '" title="Open ' + esc(t.hwi || '') + ' — record the post-job meeting">' +
+          '<span class="pjt-hwi">' + esc(t.hwi || '(no HWI)') + '</span>' +
+          '<span class="pjt-cust">' + esc(t.customer || '(no customer)') + '</span>' +
+          (t.preDate ? '<span class="pjt-date">pre-job meeting ' + esc(t.preDate) + '</span>' : '') +
+        '</button>').join('')
+    : '<div class="pjt-empty">🎉 All caught up — no post-job meetings outstanding.</div>';
+  return '<aside class="dash-side"><div class="pjt-panel">' +
+    '<div class="pjt-head">📋 Post-job to-do' + (list.length ? ' <span class="todo-count">' + list.length + '</span>' : '') + '</div>' +
+    '<p class="pjt-sub">Service jobs whose pre-job meeting is done but the post-job (R&R) one isn’t. Click one to record it.</p>' +
+    '<div class="pjt-list">' + items + '</div>' +
+  '</div></aside>';
+}
 
 // ---- Meeting report: email the action items to the team (everyone EXCEPT Mike Scofield),
 //      sent AS the logged-in user via Microsoft Graph (same path as "Send to customer"). ----
