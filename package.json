@@ -4,7 +4,7 @@
   "private": true,
   "description": "Hydro-Wates Project Manager",
   "engines": {
-    "node": "20.x"
+    "node": "22.x"
   },
   "scripts": {
     "start": "node server.js"
