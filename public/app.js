@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 61';
+const BUILD = 'build 2026-07-14 · 62';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -796,8 +796,12 @@ function isEmailAddr(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '
 function meetingReportRecipients() {
   const team = (state.templates && state.templates.team) || [];
   return team
-    .filter(m => m.name && !MTG_REPORT_EXCLUDE.test(String(m.name).trim()))
-    .map(m => ({ name: m.name, email: isEmailAddr(m.email) ? m.email.trim() : (isEmailAddr(m.contact) ? m.contact.trim() : '') }));
+    .filter(m => m.name)
+    .map(m => ({
+      name: m.name,
+      email: isEmailAddr(m.email) ? m.email.trim() : (isEmailAddr(m.contact) ? m.contact.trim() : ''),
+      checked: !MTG_REPORT_EXCLUDE.test(String(m.name).trim())   // everyone ticked by default except Mike Scofield
+    }));
 }
 function buildMeetingReport(d) {
   const j = d.job;
@@ -850,10 +854,11 @@ function mtgReportOverlayHtml(d) {
   const actions = (m.pre && m.pre.actions) || [];
   const open = actions.filter(a => !a.done).length;
   const ready = emailReady();
-  const missing = recips.filter(r => !r.email).length;
+  const missing = recips.filter(r => r.checked && !r.email).length;
   const recipRows = recips.length
     ? recips.map(r =>
         '<div class="rpt-recip">' +
+          '<label class="rpt-check" title="Include ' + esc(r.name) + '"><input type="checkbox" data-rpt-pick' + (r.checked ? ' checked' : '') + '></label>' +
           '<span class="rpt-name">' + esc(r.name) + '</span>' +
           '<input data-rpt-email type="email" placeholder="name@hydrowates.com" value="' + esc(r.email || '') + '">' +
         '</div>').join('')
@@ -868,7 +873,8 @@ function mtgReportOverlayHtml(d) {
         '<button class="btn-icon dialog-close" data-action="mtg-report-close" title="Close">✕</button></div>' +
       '<div class="dialog-body">' +
         (ready ? '' : '<div class="banner" style="background:#fdeaea;border:1px solid #f2b8b8;color:#912626">⚠️ You are not signed in with Microsoft, so the report can’t be sent as you yet — sign in with Microsoft (same as the “Send to customer” feature).</div>') +
-        '<p class="hint" style="margin:2px 0 10px">Goes to the whole team <b>except Mike Scofield</b>, from <b>your</b> account. Check the addresses' + (missing ? ' — <b>' + missing + '</b> still need an email' : '') + '.</p>' +
+        '<p class="hint" style="margin:2px 0 8px">Sent from <b>your</b> account to everyone ticked below. <b>Everyone is selected except Mike Scofield</b> — tick or untick anyone.' + (missing ? ' <b>' + missing + '</b> selected still need an email.' : '') + '</p>' +
+        '<label class="chk rpt-selall-row"><input type="checkbox" id="rptSelAll" data-change="rpt-selall"> Select / clear all</label>' +
         '<div class="rpt-recips">' + recipRows + '</div>' +
         '<p style="margin:12px 0 4px"><b>Report contents</b> — ' + actions.length + ' action item' + (actions.length === 1 ? '' : 's') + ' (' + open + ' open)</p>' +
         '<ul class="rpt-items">' + itemRows + '</ul>' +
@@ -2697,8 +2703,11 @@ document.addEventListener('click', async (e) => {
     case 'mtg-report-close': closeMtgReport(); return;
     case 'mtg-report-bg': if (e.target === el) closeMtgReport(); return;
     case 'mtg-report-send': {
-      const to = [...new Set($$('[data-rpt-email]').map(i => i.value.trim()).filter(v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)))];
-      if (!to.length) { toast('Add at least one recipient email address.', true); return; }
+      const to = [...new Set($$('.rpt-recip')
+        .filter(row => { const cb = row.querySelector('[data-rpt-pick]'); return cb && cb.checked; })
+        .map(row => { const inp = row.querySelector('[data-rpt-email]'); return inp ? inp.value.trim() : ''; })
+        .filter(v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)))];
+      if (!to.length) { toast('Tick at least one recipient with a valid email address.', true); return; }
       if (!emailReady()) { toast('Sign in with Microsoft to send the report as yourself.', true); return; }
       const rep = buildMeetingReport(state.detail);
       el.disabled = true; el.textContent = 'Sending…';
@@ -2965,6 +2974,11 @@ document.addEventListener('change', async (e) => {
     const open = rows.filter(r => { const c = r.querySelector('[data-ma-done]'); return !(c && c.checked); }).length;
     const cnt = document.querySelector('.ma-count');
     if (cnt) cnt.textContent = open + ' open · ' + rows.length + ' total';
+    return;
+  }
+  if (what === 'rpt-selall') {
+    const on = e.target.checked;
+    $$('[data-rpt-pick]').forEach(c => { c.checked = on; });
     return;
   }
   if (what === 'removed-selall') {
