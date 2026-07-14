@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 67';
+const BUILD = 'build 2026-07-14 · 68';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -2067,8 +2067,7 @@ function smBodyHtml() {
     '<table class="items leads-table">' +
       '<tr><th>HWI job no.</th><th>Customer</th><th>PO number</th><th class="num">Value</th><th>Phase</th><th>Received</th><th>Invoice status</th></tr>' +
       body +
-    '</table></div>' +
-    '<p class="hint" style="max-width:none">Received jobs come from <b>Shop Master</b>, cross-referenced with Zoho Books by the <b>HWI</b> (the invoice’s Project). The <b>awaiting-invoice worklist</b> is shown; already-<b>invoiced</b> jobs are collapsed — click the <b>✓ Invoiced</b> row to expand. Tick <b>show all invoiced</b> to include jobs invoiced more than ' + SM_RECENT_DAYS + ' days ago.<br>Invoiced jobs show the <b>actual</b> amount from Zoho. Jobs still awaiting an invoice show a <i>~projected</i> value from the SharePoint <b>Lead List</b> (ValueTotal), matched by <b>HWI</b> (the lead’s QuoteNum).</p>';
+    '</table></div>';
 }
 
 function renderShopmaster() {
