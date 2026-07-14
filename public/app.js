@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 62';
+const BUILD = 'build 2026-07-14 · 63';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -214,6 +214,81 @@ async function doMicrosoftLogin() {
     provider: 'azure',
     options: { redirectTo: location.origin, scopes: 'openid email profile offline_access https://graph.microsoft.com/Mail.Send' }
   });
+}
+
+// ---- Silent, on-demand Microsoft re-auth (to send email AS you) --------------
+// The Microsoft "send-mail" token is handed over only at sign-in and isn't kept
+// across reloads. Rather than store a long-lived refresh token, we fetch a fresh
+// one on demand: a small popup does the Microsoft round-trip (usually silent, since
+// you already have an M365 session) and hands the token back via postMessage.
+// Nothing long-lived is stored — the token stays in memory for this session only.
+async function ensureGraphToken() {
+  if (msGraphToken) return msGraphToken;
+  return await reauthMicrosoftPopup();
+}
+async function reauthMicrosoftPopup() {
+  if (!SB || !window.supabase) return null;
+  const width = 520, height = 690;
+  const left = Math.max(0, (window.screenX || 0) + (((window.outerWidth || 1024) - width) / 2));
+  const top = Math.max(0, (window.screenY || 0) + (((window.outerHeight || 768) - height) / 2));
+  // Open synchronously (inside the click gesture) or the browser blocks the popup.
+  const popup = window.open('about:blank', 'hw-ms-reauth', 'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top);
+  if (!popup) { toast('Please allow popups so the app can confirm your Microsoft sign-in.', true); return null; }
+  try { popup.document.write('<p style="font:15px system-ui,-apple-system,sans-serif;color:#334;padding:28px">Opening Microsoft sign-in…</p>'); } catch (e) {}
+  try { localStorage.setItem('hw_ms_reauth', String(Date.now())); } catch (e) {}
+  let url = null;
+  try {
+    const { data } = await SB.auth.signInWithOAuth({
+      provider: 'azure',
+      options: { skipBrowserRedirect: true, redirectTo: location.origin, scopes: 'openid email profile offline_access https://graph.microsoft.com/Mail.Send' }
+    });
+    url = data && data.url;
+  } catch (e) {}
+  if (!url) { try { popup.close(); } catch (e) {} try { localStorage.removeItem('hw_ms_reauth'); } catch (e) {} return null; }
+  try { popup.location.href = url; } catch (e) { try { popup.close(); } catch (x) {} return null; }
+  return await new Promise((resolve) => {
+    let done = false;
+    const finish = (tok) => {
+      if (done) return; done = true;
+      window.removeEventListener('message', onMsg);
+      clearInterval(watch); clearTimeout(timer);
+      try { localStorage.removeItem('hw_ms_reauth'); } catch (e) {}
+      if (tok) msGraphToken = tok;
+      resolve(tok || null);
+    };
+    const onMsg = (ev) => {
+      if (ev.origin !== location.origin || !ev.data || ev.data.type !== 'ms-graph-token') return;
+      try { popup.close(); } catch (x) {}
+      finish(ev.data.token || null);
+    };
+    window.addEventListener('message', onMsg);
+    const watch = setInterval(() => { if (popup.closed) finish(null); }, 500);
+    const timer = setTimeout(() => { try { popup.close(); } catch (x) {} finish(null); }, 120000);
+  });
+}
+// Runs INSIDE the re-auth popup: finish the round-trip, hand the token back, close.
+// Guarded by a recent localStorage flag + window.opener so it never fires on a normal load.
+async function handleMsPopupCallback() {
+  let flag = null;
+  try { flag = localStorage.getItem('hw_ms_reauth'); } catch (e) {}
+  if (!(flag && window.opener && (Date.now() - Number(flag) < 300000))) return false;
+  try { localStorage.removeItem('hw_ms_reauth'); } catch (e) {}
+  try { if (document.body) document.body.innerHTML = '<p style="font:15px system-ui,-apple-system,sans-serif;color:#334;padding:28px">Finishing Microsoft sign-in… this window will close automatically.</p>'; } catch (e) {}
+  let token = null;
+  try {
+    const cfg = await (await fetch('/api/auth/config')).json();
+    if (window.supabase && cfg.url && cfg.anonKey) {
+      const sb = window.supabase.createClient(cfg.url, cfg.anonKey, { auth: { persistSession: true, autoRefreshToken: false, detectSessionInUrl: true } });
+      for (let i = 0; i < 30 && !token; i++) {
+        const { data: { session } } = await sb.auth.getSession();
+        if (session && session.provider_token) token = session.provider_token;
+        else await new Promise(r => setTimeout(r, 200));
+      }
+    }
+  } catch (e) {}
+  try { if (window.opener) window.opener.postMessage({ type: 'ms-graph-token', token: token }, location.origin); } catch (e) {}
+  setTimeout(() => { try { window.close(); } catch (e) {} }, 300);
+  return true;
 }
 async function doLogout() {
   try { if (SB) await SB.auth.signOut(); } catch (e) {}
@@ -872,14 +947,14 @@ function mtgReportOverlayHtml(d) {
         '<div class="sub">' + esc((d.job.customer || '') + (d.job.hwi ? ' · ' + d.job.hwi : '')) + '</div></div>' +
         '<button class="btn-icon dialog-close" data-action="mtg-report-close" title="Close">✕</button></div>' +
       '<div class="dialog-body">' +
-        (ready ? '' : '<div class="banner" style="background:#fdeaea;border:1px solid #f2b8b8;color:#912626">⚠️ You are not signed in with Microsoft, so the report can’t be sent as you yet — sign in with Microsoft (same as the “Send to customer” feature).</div>') +
+        (ready ? '' : '<div class="banner" style="background:#eef4fb;border:1px solid #cfe0f2;color:#25507d">ℹ️ When you press Send, a quick Microsoft popup confirms it’s you (usually no password needed) — then the report goes out from your account.</div>') +
         '<p class="hint" style="margin:2px 0 8px">Sent from <b>your</b> account to everyone ticked below. <b>Everyone is selected except Mike Scofield</b> — tick or untick anyone.' + (missing ? ' <b>' + missing + '</b> selected still need an email.' : '') + '</p>' +
         '<label class="chk rpt-selall-row"><input type="checkbox" id="rptSelAll" data-change="rpt-selall"> Select / clear all</label>' +
         '<div class="rpt-recips">' + recipRows + '</div>' +
         '<p style="margin:12px 0 4px"><b>Report contents</b> — ' + actions.length + ' action item' + (actions.length === 1 ? '' : 's') + ' (' + open + ' open)</p>' +
         '<ul class="rpt-items">' + itemRows + '</ul>' +
         '<div class="plan-actions" style="margin-top:12px">' +
-          '<button class="btn primary" data-action="mtg-report-send"' + (ready ? '' : ' disabled') + '>✈ Send report</button>' +
+          '<button class="btn primary" data-action="mtg-report-send">✈ Send report</button>' +
           '<button class="btn" data-action="mtg-report-close">Cancel</button>' +
         '</div>' +
       '</div>' +
@@ -2708,17 +2783,20 @@ document.addEventListener('click', async (e) => {
         .map(row => { const inp = row.querySelector('[data-rpt-email]'); return inp ? inp.value.trim() : ''; })
         .filter(v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)))];
       if (!to.length) { toast('Tick at least one recipient with a valid email address.', true); return; }
-      if (!emailReady()) { toast('Sign in with Microsoft to send the report as yourself.', true); return; }
+      el.disabled = true; el.textContent = emailReady() ? 'Sending…' : 'Confirming Microsoft…';
+      const tok = await ensureGraphToken();   // silent Microsoft re-auth if we don't have a send token yet
+      if (!tok) { el.disabled = false; el.textContent = '✈ Send report'; toast('Couldn’t confirm your Microsoft sign-in — allow the popup and try again.', true); return; }
+      el.textContent = 'Sending…';
       const rep = buildMeetingReport(state.detail);
-      el.disabled = true; el.textContent = 'Sending…';
       try {
-        const r = await api('POST', '/api/job/' + encodeURIComponent(state.open) + '/send', { to, subject: rep.subject, html: rep.html, body: rep.text, kind: 'meeting-report', msToken: msGraphToken });
+        const r = await api('POST', '/api/job/' + encodeURIComponent(state.open) + '/send', { to, subject: rep.subject, html: rep.html, body: rep.text, kind: 'meeting-report', msToken: tok });
         if (r.meetings) { state.detail.meetings = r.meetings; if (state.meetingsDraft) state.meetingsDraft.reportLog = r.meetings.reportLog; }
         closeMtgReport();
         renderModal();
         toast('Meeting report sent to ' + r.to.length + ' recipient' + (r.to.length === 1 ? '' : 's') + ' ✓');
       } catch (err) {
         el.disabled = false; el.textContent = '✈ Send report';
+        if (/expired|Mail\.Send|401|Microsoft/i.test(err.message || '')) msGraphToken = null;   // stale token -> re-auth next time
         toast(err.message, true);
       }
       return;
@@ -3160,6 +3238,7 @@ document.addEventListener('drop', async (e) => {
 window.addEventListener('hashchange', () => { if (state.open) closeModal(); routeFromHash(); render(); });
 
 (async function init() {
+  if (await handleMsPopupCallback()) return;   // we're the Microsoft re-auth popup — handled; don't boot the app
   try { state.compact = localStorage.getItem('pmCompact') === '1'; } catch (e) {}
   const bt = document.getElementById('buildTag'); if (bt) bt.textContent = BUILD;
   const authed = await initAuth();
