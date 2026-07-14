@@ -1599,8 +1599,8 @@ async function handleApi(req, res, u) {
         ? [...new Set(body.to.map(x => String(x).trim()).filter(x => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x)))]
         : [];
       if (!to.length) return bad(res, 400, 'No valid recipient email address — tick a contact or type one in.');
-      const kind = body.kind === 'procedure' ? 'procedure' : 'planning';
-      const subject = String(body.subject || '').slice(0, 500) || (kind === 'procedure' ? 'Load Test Procedure' : 'Planning questions');
+      const kind = body.kind === 'procedure' ? 'procedure' : body.kind === 'meeting-report' ? 'meeting-report' : 'planning';
+      const subject = String(body.subject || '').slice(0, 500) || (kind === 'procedure' ? 'Load Test Procedure' : kind === 'meeting-report' ? 'Meeting report' : 'Planning questions');
       const text = String(body.body || '');
       const html = body.html ? String(body.html) : '';
       if (!text.trim() && !html.trim()) return bad(res, 400, 'The email body is empty.');
@@ -1608,6 +1608,14 @@ async function handleApi(req, res, u) {
         await sendMail(s, { to, subject, body: text, html: html || undefined }, body.msToken);
       } catch (e) { return bad(res, 502, String(e.message || e)); }
       const now = new Date().toISOString();
+      if (kind === 'meeting-report') {
+        const prev = (local[key] && local[key].meetings) || {};
+        const meetings = Object.assign({}, prev);
+        meetings.reportLog = (Array.isArray(prev.reportLog) ? prev.reportLog : []).concat([{ at: now, to, subject }]).slice(-20);
+        local[key] = Object.assign({}, local[key], { meetings });
+        writeJson(FILES.jobs, local);
+        return ok(res, { sent: true, to, meetings });
+      }
       if (kind === 'procedure') {
         const prev = (local[key] && local[key].procedure) || {};
         const procedure = Object.assign({}, prev);
@@ -1693,10 +1701,19 @@ async function handleApi(req, res, u) {
       const prev = (local[key] && local[key].meetings) || {};
       const blk = (v, p) => {
         v = v || {}; p = p || {};
+        const actions = Array.isArray(v.actions)
+          ? v.actions.slice(0, 200).map(a => ({
+              text: String((a && a.text) || '').slice(0, 500),
+              assignee: String((a && a.assignee) || '').slice(0, 120),
+              due: String((a && a.due) || '').slice(0, 20),
+              done: !!(a && a.done)
+            }))
+          : (Array.isArray(p.actions) ? p.actions : []);
         return {
           held: v.held !== undefined ? !!v.held : !!p.held,
           date: v.date !== undefined ? String(v.date).slice(0, 20) : (p.date || ''),
-          notes: v.notes !== undefined ? String(v.notes).slice(0, 8000) : (p.notes || '')
+          notes: v.notes !== undefined ? String(v.notes).slice(0, 8000) : (p.notes || ''),
+          actions: actions
         };
       };
       const jb = body.job || {};
@@ -1802,8 +1819,8 @@ async function handleApi(req, res, u) {
     }
     if (Array.isArray(body.team)) {
       t.team = body.team
-        .map(m => ({ name: String(m.name || '').trim().slice(0, 120), contact: String(m.contact || '').trim().slice(0, 120) }))
-        .filter(m => m.name || m.contact)
+        .map(m => ({ name: String(m.name || '').trim().slice(0, 120), contact: String(m.contact || '').trim().slice(0, 120), email: String(m.email || '').trim().slice(0, 160) }))
+        .filter(m => m.name || m.contact || m.email)
         .slice(0, 200);
     }
     if (Array.isArray(body.equipment)) {

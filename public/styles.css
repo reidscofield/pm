@@ -76,6 +76,13 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 .btn-icon { border: 0; background: transparent; color: var(--muted); padding: 4px 6px; border-radius: 6px; font-size: 14px; }
 .btn-icon:hover { background: #eef2f6; color: var(--ink); }
 
+/* Settings sub-tabs */
+.subtabs { display: flex; gap: 2px; margin: 0 0 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.subtab { border: 0; background: transparent; color: var(--muted); padding: 9px 16px; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: 0; }
+.subtab:hover { color: var(--ink); background: #f6f9fb; }
+.subtab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+.set-savebar { margin-top: 4px; }
+
 /* ---------- layout ---------- */
 .view { padding: 20px 22px 60px; max-width: 1500px; margin: 0 auto; }
 
@@ -190,6 +197,26 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 .mtg-date { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; }
 .mtg-date input { width: auto; padding: 3px 6px; }
 .mtg-date label { display: inline; margin: 0; }
+/* Pre-job action items — assignable task list */
+.ma-wrap { margin: 2px 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f7fafd; }
+.ma-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ma-count { font-size: 12px; font-weight: 400; }
+.ma-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.ma-row { display: grid; grid-template-columns: 22px 1fr 150px 138px 26px; gap: 8px; align-items: center; }
+.ma-row.ma-hdr { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.ma-row.ma-hdr span { padding: 0 2px; }
+.ma-check { display: inline-flex; align-items: center; justify-content: center; margin: 0; }
+.ma-check input { margin: 0; }
+.ma-row .ma-text, .ma-row .ma-assignee, .ma-row .ma-due { padding: 5px 8px; font-size: 13px; width: auto; }
+.ma-row.done { opacity: .65; }
+.ma-row.done .ma-text { text-decoration: line-through; color: var(--muted); }
+/* Meeting report send overlay */
+.rpt-recips { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px; }
+.rpt-recip { display: grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }
+.rpt-recip .rpt-name { font-weight: 600; font-size: 13.5px; }
+.rpt-recip input { padding: 6px 9px; font-size: 13px; }
+.rpt-items { margin: 4px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.6; }
+.rpt-items li { margin-bottom: 2px; }
 .card:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(16, 42, 67, .12), 0 8px 24px rgba(16, 42, 67, .08); }
 .col-rental .card { border-left-color: var(--rental); }
 .col-service .card { border-left-color: var(--service); }
@@ -306,8 +333,9 @@ table.items td.num, table.items th.num { text-align: right; white-space: nowrap;
 .resp-top .resp-pick { flex: 1; width: auto; }
 .resp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .team-list { margin: 4px 0 8px; }
-.team-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
-.team-row input { flex: 1; }
+.team-head { display: grid; grid-template-columns: 1fr 1fr 1.4fr 26px; gap: 8px; font-size: 12px; color: var(--muted); margin: 2px 0 4px; padding: 0 2px; }
+.team-row { display: grid; grid-template-columns: 1fr 1fr 1.4fr 26px; gap: 8px; align-items: center; margin-bottom: 6px; }
+.team-row input { width: 100%; }
 .contacts-box {
   border: 1px solid var(--line); border-radius: 8px; background: #f8fafc;
   padding: 10px 12px; margin-bottom: 12px;
@@ -363,6 +391,9 @@ table.items td.num, table.items th.num { text-align: right; white-space: nowrap;
   background: #2f2f2f; color: #fff; padding: 11px; font-size: 15px; }
 .auth-ms:hover { background: #1f1f1f; }
 .ms-logo { flex: none; display: block; }
+.auth-hint { color: #64727c; font-size: 12.5px; line-height: 1.5; margin: 12px 4px 4px; }
+.auth-alt { background: none; border: 0; color: #64727c; font-size: 13px; text-decoration: underline; cursor: pointer; padding: 6px; margin-top: 6px; }
+.auth-alt:hover { color: var(--brand); }
 .auth-or { display: flex; align-items: center; gap: 10px; color: #9aa6ae; font-size: 12px; margin: 16px 0; }
 .auth-or::before, .auth-or::after { content: ''; flex: 1; height: 1px; background: #e3e9ee; }
 #authForm { display: flex; flex-direction: column; gap: 10px; }

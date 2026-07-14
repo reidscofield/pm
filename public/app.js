@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-01 · 52';
+const BUILD = 'build 2026-07-14 · 61';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -12,6 +12,17 @@ const esc = (s) => String(s === undefined || s === null ? '' : s)
 // have their token to send as them). No shared account, no SMTP.
 function emailReady() {
   return !!msGraphToken;
+}
+
+// The email sign-off = the signed-in person's name (so it matches who's actually
+// sending), falling back to the company name when a login carries no name.
+function userFromSession(session) {
+  if (!session || !session.user) return null;
+  const u = session.user, md = u.user_metadata || {};
+  return { email: u.email || '', name: String(md.full_name || md.name || md.display_name || '').trim() };
+}
+function signOff() {
+  return (currentUser && currentUser.name) || 'Hydro-Wates';
 }
 
 const CATS = [
@@ -110,6 +121,7 @@ async function api(method, url, body) {
 let SB = null;          // supabase-js client (only when login is required)
 let authToken = null;   // current access token, sent on every api() call
 let msGraphToken = null; // the logged-in user's Microsoft token — used to send email AS them
+let currentUser = null;  // { email, name } of the signed-in user — used for the email sign-off
 
 // Returns true if the app may proceed, false if the login screen is showing.
 async function initAuth() {
@@ -126,11 +138,13 @@ async function initAuth() {
   });
   SB.auth.onAuthStateChange((_e, session) => {
     authToken = session ? session.access_token : null;
+    currentUser = userFromSession(session);
     if (session && session.provider_token) msGraphToken = session.provider_token;   // Microsoft sign-in token
   });
   const { data: { session } } = await SB.auth.getSession();
   if (!session) { renderLogin(); return false; }
   authToken = session.access_token;
+  currentUser = userFromSession(session);
   if (session.provider_token) msGraphToken = session.provider_token;   // present right after a Microsoft sign-in
   const lb = document.getElementById('logoutBtn');
   if (lb) { lb.hidden = false; lb.textContent = 'Sign out' + (session.user && session.user.email ? ' · ' + session.user.email : ''); }
@@ -153,17 +167,26 @@ function renderLogin(msg) {
           '<rect x="1" y="11" width="9" height="9" fill="#00A4EF"></rect>' +
           '<rect x="11" y="11" width="9" height="9" fill="#FFB900"></rect>' +
         '</svg>Sign in with Microsoft</button>' +
-      '<div class="auth-or"><span>or work email</span></div>' +
-      '<form id="authForm">' +
-        '<input id="authEmail" type="email" placeholder="you@hydrowates.com" required autocomplete="username">' +
-        '<input id="authPass" type="password" placeholder="Password" required autocomplete="current-password">' +
-        '<button class="btn primary" type="submit">Sign in</button>' +
-      '</form>' +
+      '<p class="auth-hint">Use your Hydro-Wates Microsoft account. New staff are signed in automatically — no account setup needed.</p>' +
+      '<button type="button" class="auth-alt" id="authShowEmail">Can’t use Microsoft? Sign in with email</button>' +
+      '<div id="authEmailWrap" hidden>' +
+        '<div class="auth-or"><span>work email</span></div>' +
+        '<form id="authForm">' +
+          '<input id="authEmail" type="email" placeholder="you@hydrowates.com" required autocomplete="username">' +
+          '<input id="authPass" type="password" placeholder="Password" required autocomplete="current-password">' +
+          '<button class="btn primary" type="submit">Sign in</button>' +
+        '</form>' +
+      '</div>' +
     '</div></div>';
   const form = document.getElementById('authForm');
   if (form) form.addEventListener('submit', doEmailLogin);
   const ms = document.getElementById('authMs');
   if (ms) ms.addEventListener('click', doMicrosoftLogin);
+  const showEmail = document.getElementById('authShowEmail');
+  if (showEmail) showEmail.addEventListener('click', () => {
+    const w = document.getElementById('authEmailWrap'); if (w) w.hidden = false;
+    showEmail.hidden = true;
+  });
   const logo = document.getElementById('authLogo');
   if (logo) logo.onerror = function () { this.outerHTML = '<div class="auth-brand"><span class="brand-drop">💧</span> Hydro-Wates</div>'; };
 }
@@ -651,19 +674,70 @@ function meetingsTabHtml(d) {
   };
   return '<div class="mtg">' +
     '<p class="muted" style="line-height:1.5;margin-bottom:6px">Track the meetings for this job — tick <b>held</b> and it stamps the date. A job with a pre-job meeting but no post-job one shows under <b>📋 Post-job to-do</b> on the dashboard.</p>' +
-    block('pre', 'Pre-job meeting', 'Planning, coordination, safety brief — who attended, key points, action items…') +
+    block('pre', 'Pre-job meeting', 'Planning, coordination, safety brief — who attended, key points…') +
+    mtgActionListHtml((m.pre && m.pre.actions) || []) +
     block('post', 'Post-job meeting', 'Debrief / lessons learned — what went well, what to improve, follow-ups…') +
     '<label style="margin-top:10px">General job notes</label>' +
     '<textarea id="mtgNotes" rows="4" placeholder="Anything else worth noting about this job…">' + esc(m.notes || '') + '</textarea>' +
-    '<div class="plan-actions" style="margin-top:12px"><button class="btn primary" data-action="mtg-save">Save</button></div>' +
+    '<div class="plan-actions" style="margin-top:12px">' +
+      '<button class="btn primary" data-action="mtg-save">Save</button>' +
+      '<button class="btn" data-action="mtg-report-open" title="Email the action items to the team (except Mike Scofield)">✉ Send meeting report</button>' +
+    '</div>' +
+    (m.reportLog && m.reportLog.length
+      ? '<div class="muted" style="font-size:12px;margin-top:6px">Report last sent ' + esc(String(m.reportLog[m.reportLog.length - 1].at || '').slice(0, 10)) +
+        ' to ' + (m.reportLog[m.reportLog.length - 1].to || []).length + ' recipient' + ((m.reportLog[m.reportLog.length - 1].to || []).length === 1 ? '' : 's') + '.</div>'
+      : '') +
   '</div>';
+}
+// ---- Pre-job action items: a live task list, each assignable to a Hydro-Wates staff member ----
+function mtgActionListHtml(actions) {
+  actions = actions || [];
+  const team = (state.templates && state.templates.team) || [];
+  const names = team.map(m => m.name);
+  const open = actions.filter(a => !a.done).length;
+  const rows = actions.map((a, i) => {
+    let opts = '<option value="">— unassigned —</option>' +
+      team.map(m => '<option' + (a.assignee === m.name ? ' selected' : '') + '>' + esc(m.name) + '</option>').join('');
+    if (a.assignee && names.indexOf(a.assignee) === -1) opts += '<option selected>' + esc(a.assignee) + '</option>';
+    return '<div class="ma-row' + (a.done ? ' done' : '') + '" data-mtg-action-row>' +
+      '<label class="ma-check" title="Mark done"><input type="checkbox" data-ma-done data-change="mtg-action-done"' + (a.done ? ' checked' : '') + '></label>' +
+      '<input class="ma-text" data-ma-text placeholder="Action item — what needs doing" value="' + esc(a.text || '') + '">' +
+      '<select class="ma-assignee" data-ma-assignee title="Assign to">' + opts + '</select>' +
+      '<input class="ma-due" type="date" data-ma-due value="' + esc(a.due || '') + '" title="Due date">' +
+      '<button class="btn-icon" data-action="mtg-action-del" data-i="' + i + '" title="Remove">✕</button>' +
+    '</div>';
+  }).join('');
+  return '<div class="ma-wrap">' +
+    '<div class="ma-head">📝 <b>Action items</b>' +
+      '<span class="ma-count muted">' + (actions.length ? open + ' open · ' + actions.length + ' total' : 'assign tasks to your team') + '</span>' +
+    '</div>' +
+    (actions.length
+      ? '<div class="ma-list">' +
+          '<div class="ma-row ma-hdr"><span></span><span>Task</span><span>Assigned to</span><span>Due</span><span></span></div>' +
+          rows +
+        '</div>'
+      : '<div class="muted" style="font-size:12.5px;margin:2px 0 8px">No action items yet — add tasks and assign each to a team member.</div>') +
+    '<button class="btn small" data-action="mtg-action-add">+ Add action item</button>' +
+    (team.length ? '' : '<span class="muted" style="font-size:12px;margin-left:8px">Add staff under <b>Templates → Team</b> to assign people.</span>') +
+  '</div>';
+}
+function collectMtgActions() {
+  return $$('[data-mtg-action-row]').map(row => {
+    const q = s => row.querySelector(s);
+    return {
+      text: (q('[data-ma-text]') ? q('[data-ma-text]').value : '').trim(),
+      assignee: q('[data-ma-assignee]') ? q('[data-ma-assignee]').value : '',
+      due: q('[data-ma-due]') ? q('[data-ma-due]').value : '',
+      done: !!(q('[data-ma-done]') && q('[data-ma-done]').checked)
+    };
+  });
 }
 function collectMeetings() {
   const m = state.meetingsDraft || (state.meetingsDraft = { pre: {}, post: {}, notes: '' });
   if (!document.getElementById('mtgpreHeld')) return m;
   const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
   const c = id => { const el = document.getElementById(id); return el ? el.checked : false; };
-  m.pre = { held: c('mtgpreHeld'), date: g('mtgpreDate'), notes: g('mtgpreNotes') };
+  m.pre = { held: c('mtgpreHeld'), date: g('mtgpreDate'), notes: g('mtgpreNotes'), actions: collectMtgActions() };
   m.post = { held: c('mtgpostHeld'), date: g('mtgpostDate'), notes: g('mtgpostNotes') };
   m.notes = g('mtgNotes');
   ['pre', 'post'].forEach(k => { if (m[k].held && !m[k].date) m[k].date = new Date().toISOString().slice(0, 10); });
@@ -674,8 +748,11 @@ async function saveMeetings(silent) {
   if (!m || !state.open) return;
   const j = state.detail.job;
   try {
+    const preOut = Object.assign({}, m.pre, {
+      actions: (m.pre.actions || []).filter(a => (a.text && a.text.trim()) || a.assignee)
+    });
     const r = await api('PUT', '/api/job/' + encodeURIComponent(state.open) + '/meetings',
-      { pre: m.pre, post: m.post, notes: m.notes, job: { hwi: j.hwi, customer: j.customer, po: j.reference } });
+      { pre: preOut, post: m.post, notes: m.notes, job: { hwi: j.hwi, customer: j.customer, po: j.reference } });
     state.meetingsDraft = JSON.parse(JSON.stringify(r.meetings));
     state.detail.meetings = r.meetings;
     const row = state.jobs.find(x => x.key === state.open);
@@ -711,6 +788,104 @@ async function openMtgTodo() {
   host.innerHTML = mtgTodoOverlayHtml();
 }
 function closeMtgTodo() { const h = document.getElementById('mtgTodoModal'); if (h) h.innerHTML = ''; }
+
+// ---- Meeting report: email the action items to the team (everyone EXCEPT Mike Scofield),
+//      sent AS the logged-in user via Microsoft Graph (same path as "Send to customer"). ----
+var MTG_REPORT_EXCLUDE = /^(mike|michael)\s+scofield$/i;
+function isEmailAddr(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || '').trim()); }
+function meetingReportRecipients() {
+  const team = (state.templates && state.templates.team) || [];
+  return team
+    .filter(m => m.name && !MTG_REPORT_EXCLUDE.test(String(m.name).trim()))
+    .map(m => ({ name: m.name, email: isEmailAddr(m.email) ? m.email.trim() : (isEmailAddr(m.contact) ? m.contact.trim() : '') }));
+}
+function buildMeetingReport(d) {
+  const j = d.job;
+  const m = state.meetingsDraft || {};
+  const pre = m.pre || {}, post = m.post || {};
+  const actions = pre.actions || [];
+  const sender = signOff();
+  const ref = j.hwi || j.number || '';
+  const heading = (j.customer || 'Job') + (ref ? ' — ' + ref : '');
+  const subject = 'Pre-job meeting report — ' + heading;
+  const open = actions.filter(a => !a.done).length;
+  const base = 'padding:6px 9px;border:1px solid #dfe6ec;font-size:13px;vertical-align:top';
+  const thS = 'padding:6px 9px;border:1px solid #dfe6ec;background:#f2f6f9;text-align:left;font-size:12px;color:#5a6b7b';
+  const rows = actions.length
+    ? actions.map((a, i) => {
+        const taskS = base + (a.done ? ';text-decoration:line-through;color:#8a97a5' : '');
+        return '<tr>' +
+          '<td style="' + base + '">' + (i + 1) + '</td>' +
+          '<td style="' + taskS + '">' + esc(a.text || '(no description)') + '</td>' +
+          '<td style="' + base + '"><b>' + esc(a.assignee || 'Unassigned') + '</b></td>' +
+          '<td style="' + base + '">' + esc(a.due || '—') + '</td>' +
+          '<td style="' + base + '">' + (a.done ? '✓ Done' : 'Open') + '</td>' +
+        '</tr>';
+      }).join('')
+    : '<tr><td style="' + base + '" colspan="5"><i>No action items were recorded for this meeting.</i></td></tr>';
+  const statusLine = 'Pre-job meeting: ' + (pre.held ? 'held' + (pre.date ? ' on ' + esc(pre.date) : '') : 'not yet held') +
+    ' &nbsp;·&nbsp; Post-job meeting: ' + (post.held ? 'held' + (post.date ? ' on ' + esc(post.date) : '') : 'not yet held');
+  const html = '<div style="font:14px/1.55 Arial,Segoe UI,sans-serif;color:#1a2733">' +
+    '<h2 style="margin:0 0 2px;font-size:18px">Pre-job meeting report</h2>' +
+    '<div style="color:#5a6b7b;margin-bottom:10px">' + esc(heading) + (j.reference ? ' &nbsp;·&nbsp; PO ' + esc(j.reference) : '') + '</div>' +
+    '<p style="margin:6px 0">' + statusLine + '</p>' +
+    '<p style="margin:14px 0 6px"><b>Action items</b> — ' + open + ' open of ' + actions.length + '</p>' +
+    '<table style="border-collapse:collapse;border:1px solid #dfe6ec;width:100%">' +
+      '<thead><tr><th style="' + thS + '">#</th><th style="' + thS + '">Task</th><th style="' + thS + '">Assigned to</th><th style="' + thS + '">Due</th><th style="' + thS + '">Status</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>' +
+    (pre.notes ? '<p style="margin:14px 0 4px"><b>Meeting notes</b></p><div style="white-space:pre-wrap;background:#f7fafd;border:1px solid #e3ebf1;border-radius:6px;padding:8px 10px;font-size:13px">' + esc(pre.notes) + '</div>' : '') +
+    '<p style="color:#8a97a5;font-size:12px;margin-top:16px">Sent from the Hydro-Wates Project Manager by ' + esc(sender) + '.</p>' +
+  '</div>';
+  const lines = actions.length
+    ? actions.map((a, i) => (i + 1) + '. ' + (a.text || '(no description)') + ' — ' + (a.assignee || 'Unassigned') + (a.due ? ' (due ' + a.due + ')' : '') + (a.done ? ' [DONE]' : '')).join('\n')
+    : 'No action items were recorded for this meeting.';
+  const text = 'Pre-job meeting report\n' + heading + (j.reference ? ' · PO ' + j.reference : '') + '\n\n' +
+    statusLine.replace(/&nbsp;·&nbsp;/g, ' · ') + '\n\nAction items (' + open + ' open of ' + actions.length + '):\n' + lines +
+    (pre.notes ? '\n\nMeeting notes:\n' + pre.notes : '') + '\n\nSent from the Hydro-Wates Project Manager.';
+  return { subject, html, text };
+}
+function mtgReportOverlayHtml(d) {
+  const recips = state.mtgReportRecipients || [];
+  const m = state.meetingsDraft || {};
+  const actions = (m.pre && m.pre.actions) || [];
+  const open = actions.filter(a => !a.done).length;
+  const ready = emailReady();
+  const missing = recips.filter(r => !r.email).length;
+  const recipRows = recips.length
+    ? recips.map(r =>
+        '<div class="rpt-recip">' +
+          '<span class="rpt-name">' + esc(r.name) + '</span>' +
+          '<input data-rpt-email type="email" placeholder="name@hydrowates.com" value="' + esc(r.email || '') + '">' +
+        '</div>').join('')
+    : '<div class="muted">No team members found. Add staff under Templates → Team.</div>';
+  const itemRows = actions.length
+    ? actions.map(a => '<li>' + esc(a.text || '(no description)') + ' — <b>' + esc(a.assignee || 'Unassigned') + '</b>' + (a.due ? ' · due ' + esc(a.due) : '') + (a.done ? ' · <span style="color:#1a7f45">done</span>' : '') + '</li>').join('')
+    : '<li class="muted">No action items recorded yet.</li>';
+  return '<div class="overlay" data-action="mtg-report-bg">' +
+    '<div class="dialog" style="max-width:600px">' +
+      '<div class="dialog-head"><div><h2>✉ Send meeting report</h2>' +
+        '<div class="sub">' + esc((d.job.customer || '') + (d.job.hwi ? ' · ' + d.job.hwi : '')) + '</div></div>' +
+        '<button class="btn-icon dialog-close" data-action="mtg-report-close" title="Close">✕</button></div>' +
+      '<div class="dialog-body">' +
+        (ready ? '' : '<div class="banner" style="background:#fdeaea;border:1px solid #f2b8b8;color:#912626">⚠️ You are not signed in with Microsoft, so the report can’t be sent as you yet — sign in with Microsoft (same as the “Send to customer” feature).</div>') +
+        '<p class="hint" style="margin:2px 0 10px">Goes to the whole team <b>except Mike Scofield</b>, from <b>your</b> account. Check the addresses' + (missing ? ' — <b>' + missing + '</b> still need an email' : '') + '.</p>' +
+        '<div class="rpt-recips">' + recipRows + '</div>' +
+        '<p style="margin:12px 0 4px"><b>Report contents</b> — ' + actions.length + ' action item' + (actions.length === 1 ? '' : 's') + ' (' + open + ' open)</p>' +
+        '<ul class="rpt-items">' + itemRows + '</ul>' +
+        '<div class="plan-actions" style="margin-top:12px">' +
+          '<button class="btn primary" data-action="mtg-report-send"' + (ready ? '' : ' disabled') + '>✈ Send report</button>' +
+          '<button class="btn" data-action="mtg-report-close">Cancel</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+function openMtgReport() {
+  let host = document.getElementById('mtgReportModal');
+  if (!host) { host = document.createElement('div'); host.id = 'mtgReportModal'; document.body.appendChild(host); }
+  host.innerHTML = mtgReportOverlayHtml(state.detail);
+}
+function closeMtgReport() { const h = document.getElementById('mtgReportModal'); if (h) h.innerHTML = ''; }
 
 function renderModal() {
   const d = state.detail;
@@ -810,8 +985,7 @@ function buildEmail() {
     .split('{customer}').join(j.customer || '');
   const numbered = (p.questions || []).map((q, i) => (i + 1) + ') ' + q.text + answerHint(q)).join('\n\n');
   const subject = fill(t.emailSubject);
-  const body = fill(t.emailIntro) + '\n\n' + numbered + '\n\n' + fill(t.emailOutro) +
-    (state.settings && state.settings.senderName ? '\n' + state.settings.senderName : '');
+  const body = fill(t.emailIntro) + '\n\n' + numbered + '\n\n' + fill(t.emailOutro) + '\n' + signOff();
   return { subject, body };
 }
 
@@ -1632,7 +1806,7 @@ function procedureHtml(p, j) {
 
 function buildProcedureEmail(p, j) {
   const ref = p.projectRef || j.number || 'upcoming job';
-  const sender = (state.settings && state.settings.senderName) || 'Hydro-Wates';
+  const sender = signOff();
   const subject = 'Load Test Procedure — ' + ref;
   const coverLine = 'Please find below the load test procedure for ' + (j.customer || 'your site') + ' (' + ref + '). Please review and let us know if you have any questions or require changes ahead of the test.';
   const text = 'Hi,\n\n' + coverLine + '\n\nMany thanks,\n' + sender + '\n\n----------------------------------------\n\n' + procedureText(p, j);
@@ -1856,8 +2030,9 @@ function collectTemplates() {
   if ($('.team-list')) {
     t.team = $$('[data-team-row]').map(r => ({
       name: r.querySelector('[data-tmname]').value.trim(),
-      contact: r.querySelector('[data-tmcontact]').value.trim()
-    })).filter(m => m.name || m.contact);
+      contact: r.querySelector('[data-tmcontact]').value.trim(),
+      email: (r.querySelector('[data-tmemail]') ? r.querySelector('[data-tmemail]').value.trim() : '')
+    })).filter(m => m.name || m.contact || m.email);
   }
   if ($('#tplEquip')) t.equipment = $('#tplEquip').value.split('\n').map(s => s.trim()).filter(Boolean);
   return t;
@@ -1868,9 +2043,24 @@ function teamRowsHtml(t) {
   return '<div class="team-list">' + team.map((m, i) =>
     '<div class="team-row" data-team-row>' +
       '<input data-tmname placeholder="Name" value="' + esc(m.name || '') + '">' +
-      '<input data-tmcontact placeholder="Phone or email" value="' + esc(m.contact || '') + '">' +
+      '<input data-tmcontact placeholder="Phone" value="' + esc(m.contact || '') + '">' +
+      '<input data-tmemail type="email" placeholder="Email" value="' + esc(m.email || '') + '">' +
       '<button class="btn-icon" data-action="tpl-team-del" data-i="' + i + '" title="Remove">✕</button>' +
     '</div>').join('') + '</div>';
+}
+
+// The Hydro-Wates staff roster — now lives in Settings. Name feeds the procedure
+// Responsibilities + meeting Action-item dropdowns; Email is where the meeting report is sent.
+function teamPanelHtml() {
+  const t = state.templates || {};
+  return '<div class="panel">' +
+    '<h2>Team / employees <span class="muted" style="font-weight:400;font-size:13px">(Hydro-Wates staff)</span></h2>' +
+    '<p class="hint">Your staff roster. The <b>name</b> appears in the dropdowns when you assign <b>Responsibilities</b> in a procedure and <b>Action items</b> in a meeting. The <b>email</b> is where the <b>meeting report</b> is sent — to everyone here <b>except Mike Scofield</b>.</p>' +
+    '<div class="team-head"><span>Name</span><span>Phone</span><span>Email</span><span></span></div>' +
+    teamRowsHtml(t) +
+    '<button class="btn small" data-action="tpl-team-add">+ Add person</button>' +
+    '<div style="margin-top:12px"><button class="btn primary" data-action="tpl-save">Save team</button></div>' +
+  '</div>';
 }
 
 function renderTemplates() {
@@ -1915,13 +2105,6 @@ function renderTemplates() {
       '<button class="btn primary" data-action="tpl-save">Save questions & wording</button>' +
     '</div>' +
     '<div class="panel">' +
-      '<h2>Team contacts <span class="muted" style="font-weight:400;font-size:13px">(Hydro-Wates staff)</span></h2>' +
-      '<p class="hint">These appear in the dropdown when you fill the <b>Responsibilities</b> section of a procedure — pick a name and their contact fills in automatically. Add your team below.</p>' +
-      teamRowsHtml(t) +
-      '<button class="btn small" data-action="tpl-team-add">+ Add person</button>' +
-      '<div style="margin-top:12px"><button class="btn primary" data-action="tpl-save">Save team</button></div>' +
-    '</div>' +
-    '<div class="panel">' +
       '<h2>Standard equipment <span class="muted" style="font-weight:400;font-size:13px">(load-test kit)</span></h2>' +
       '<p class="hint">This list is pre-loaded into the <b>Equipment &amp; materials</b> section (step 4) of every new procedure — you then edit it per job (sizes, quantities). One item per line.</p>' +
       '<textarea id="tplEquip" rows="' + Math.max(6, (t.equipment || []).length + 1) + '">' + esc((t.equipment || []).join('\n')) + '</textarea>' +
@@ -1936,7 +2119,6 @@ function collectSettings() {
   if ($('#setDc')) s.dc = get('#setDc');
   if ($('#setCid')) s.clientId = get('#setCid').trim();
   if ($('#setCsec')) s.clientSecret = get('#setCsec').trim();
-  if ($('#setSender')) s.senderName = get('#setSender');
   if ($('#setMaxPages')) s.maxPages = Number(get('#setMaxPages')) || 3;
   if ($('#setDemo')) s.demoMode = get('#setDemo');
   if ($('#setDefCat')) s.defaultCategory = get('#setDefCat');
@@ -2085,16 +2267,32 @@ function renderSettings() {
       '<div class="plan-actions"><button class="btn danger" data-action="ms-disconnect">Disconnect</button></div>';
   }
 
-  $('#view').innerHTML =
+  const zohoPanel =
     '<div class="panel"><h2>Zoho Books connection</h2>' +
       '<p class="hint">The app only <b>reads</b> from Zoho Books — it never changes anything there.</p>' + connHtml +
-    '</div>' +
+    '</div>';
 
+  const spPanel =
     '<div class="panel"><h2>SharePoint lead list</h2>' +
       '<p class="hint">Feeds the <b>Invoices</b> page: every lead in your list that has received a PO, marked completed automatically once it is invoiced in Zoho Books. Read-only — the app never changes the list.</p>' +
       spHtml +
-    '</div>' +
+    '</div>';
 
+  const shopmasterPanel =
+    '<div class="panel"><h2>Shop Master <span class="muted" style="font-weight:400;font-size:13px">(received-jobs feed for the Invoices page)</span></h2>' +
+      '<p class="hint">Read-only connection to Shop Master’s Supabase database. The <b>Invoices</b> page lists your received jobs from here and cross-references Zoho Books to show which are invoiced. ' +
+        (s.shopmasterConnected ? '<b style="color:#1d6f37">● Connected</b>' : '<b style="color:#a02626">● Not connected</b>') + '</p>' +
+      '<div class="frow">' +
+        '<div><label>Supabase project URL</label><input id="smUrl" value="' + esc((s.shopmaster && s.shopmaster.url) || '') + '" placeholder="https://xxxx.supabase.co"></div>' +
+        '<div><label>anon / public API key</label><input id="smKey" type="password" value="' + esc((s.shopmaster && s.shopmaster.key) || '') + '" autocomplete="off" placeholder="eyJ…"></div>' +
+      '</div>' +
+      '<div class="plan-actions">' +
+        '<button class="btn" data-action="sm-test">Test connection</button>' +
+        '<span class="muted" style="font-size:12.5px;align-self:center">Read-only. Use the <b>anon / public</b> key — never the service_role key.</span>' +
+      '</div>' +
+    '</div>';
+
+  const jobCountPanel =
     '<div class="panel"><h2>What counts as a job?</h2>' +
       '<p class="hint">Tick the Zoho Books record types that should appear on the dashboard.</p>' +
       '<div class="frow tight">' +
@@ -2102,8 +2300,9 @@ function renderSettings() {
       '</div>' +
       '<div class="frow" style="margin-top:8px"><div style="max-width:220px"><label>How far back to fetch (pages of 200 records)</label>' +
       '<input id="setMaxPages" type="number" min="1" max="10" value="' + esc(s.maxPages) + '"></div></div>' +
-    '</div>' +
+    '</div>';
 
+  const rulesPanel =
     '<div class="panel"><h2>Rental / Service / Sales rules</h2>' +
       '<p class="hint">Each job is matched against these keywords (checked against its line items, reference, notes and customer name). ' +
       '<b>First match wins</b>, top to bottom. Anything that matches nothing goes to the default. You can always override a single job from its Details tab.</p>' +
@@ -2120,32 +2319,30 @@ function renderSettings() {
         '<div style="display:flex;align-items:center;gap:8px;margin-left:auto"><label style="margin:0">If nothing matches:</label>' +
         '<select id="setDefCat" style="width:auto">' + CATS.map(([v, l]) => '<option value="' + v + '"' + (s.defaultCategory === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div>' +
       '</div>' +
-    '</div>' +
-
-    '<div class="panel"><h2>Shop Master <span class="muted" style="font-weight:400;font-size:13px">(received-jobs feed for the Invoices page)</span></h2>' +
-      '<p class="hint">Read-only connection to Shop Master’s Supabase database. The <b>Invoices</b> page lists your received jobs from here and cross-references Zoho Books to show which are invoiced. ' +
-        (s.shopmasterConnected ? '<b style="color:#1d6f37">● Connected</b>' : '<b style="color:#a02626">● Not connected</b>') + '</p>' +
-      '<div class="frow">' +
-        '<div><label>Supabase project URL</label><input id="smUrl" value="' + esc((s.shopmaster && s.shopmaster.url) || '') + '" placeholder="https://xxxx.supabase.co"></div>' +
-        '<div><label>anon / public API key</label><input id="smKey" type="password" value="' + esc((s.shopmaster && s.shopmaster.key) || '') + '" autocomplete="off" placeholder="eyJ…"></div>' +
-      '</div>' +
-      '<div class="plan-actions">' +
-        '<button class="btn" data-action="sm-test">Test connection</button>' +
-        '<span class="muted" style="font-size:12.5px;align-self:center">Read-only. Use the <b>anon / public</b> key — never the service_role key.</span>' +
-      '</div>' +
-    '</div>' +
-
-    '<div class="panel"><h2>General</h2>' +
-      '<div class="frow">' +
-        '<div><label>Your name (email sign-off)</label><input id="setSender" value="' + esc(s.senderName) + '" placeholder="e.g. Sam Green"></div>' +
-        '<div><label>Demo data</label><select id="setDemo">' +
-          '<option value="auto"' + (s.demoMode === 'auto' ? ' selected' : '') + '>Automatic (demo until connected)</option>' +
-          '<option value="on"' + (s.demoMode === 'on' ? ' selected' : '') + '>Always show demo data</option>' +
-          '<option value="off"' + (s.demoMode === 'off' ? ' selected' : '') + '>Never show demo data</option>' +
-        '</select></div>' +
-      '</div>' +
-      '<button class="btn primary" data-action="set-save">Save settings</button>' +
     '</div>';
+
+  const demoPanel =
+    '<div class="panel"><h2>Demo data</h2>' +
+      '<p class="hint"><b>Demo data is fake sample jobs — for demonstrations and testing only.</b> It never touches or shows your real jobs. Keep it <b>off</b> for normal use; turn it <b>on</b> only when you want to show the app with placeholder data.</p>' +
+      '<select id="setDemo" style="max-width:380px">' +
+        '<option value="off"' + (s.demoMode === 'on' ? '' : ' selected') + '>Off — use my real jobs</option>' +
+        '<option value="on"' + (s.demoMode === 'on' ? ' selected' : '') + '>On — show demo data only (demos &amp; testing)</option>' +
+      '</select>' +
+    '</div>';
+
+  const saveBar = '<div class="set-savebar"><button class="btn primary" data-action="set-save">Save settings</button></div>';
+  const groups = {
+    connections: zohoPanel + spPanel + shopmasterPanel + saveBar,
+    rules: jobCountPanel + rulesPanel + saveBar,
+    team: teamPanelHtml(),
+    prefs: demoPanel + saveBar
+  };
+  const TABS = [['connections', 'Connections'], ['rules', 'Job rules'], ['team', 'Team'], ['prefs', 'Preferences']];
+  const tab = groups[state.settingsTab] ? state.settingsTab : 'connections';
+  const tabBar = '<div class="subtabs">' +
+    TABS.map(([k, l]) => '<button class="subtab' + (tab === k ? ' active' : '') + '" data-action="set-tab" data-tab="' + k + '">' + l + '</button>').join('') +
+  '</div>';
+  $('#view').innerHTML = tabBar + groups[tab];
 
   // Fetch the lead list's columns once, then guess sensible mappings.
   if (s.msConnected && ms.listId && state.msCols === null && !state._msColsLoading) {
@@ -2480,7 +2677,43 @@ document.addEventListener('click', async (e) => {
       } catch (err) { toast(err.message, true); }
       return;
     }
+    case 'mtg-action-add':
+      collectMeetings();
+      state.meetingsDraft.pre = state.meetingsDraft.pre || {};
+      state.meetingsDraft.pre.actions = (state.meetingsDraft.pre.actions || []).concat([{ text: '', assignee: '', due: '', done: false }]);
+      renderModal();
+      return;
+    case 'mtg-action-del':
+      collectMeetings();
+      if (state.meetingsDraft.pre && state.meetingsDraft.pre.actions) state.meetingsDraft.pre.actions.splice(Number(el.dataset.i), 1);
+      renderModal();
+      return;
     case 'mtg-save': await saveMeetings(); return;
+    case 'mtg-report-open':
+      collectMeetings();
+      state.mtgReportRecipients = meetingReportRecipients();
+      openMtgReport();
+      return;
+    case 'mtg-report-close': closeMtgReport(); return;
+    case 'mtg-report-bg': if (e.target === el) closeMtgReport(); return;
+    case 'mtg-report-send': {
+      const to = [...new Set($$('[data-rpt-email]').map(i => i.value.trim()).filter(v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)))];
+      if (!to.length) { toast('Add at least one recipient email address.', true); return; }
+      if (!emailReady()) { toast('Sign in with Microsoft to send the report as yourself.', true); return; }
+      const rep = buildMeetingReport(state.detail);
+      el.disabled = true; el.textContent = 'Sending…';
+      try {
+        const r = await api('POST', '/api/job/' + encodeURIComponent(state.open) + '/send', { to, subject: rep.subject, html: rep.html, body: rep.text, kind: 'meeting-report', msToken: msGraphToken });
+        if (r.meetings) { state.detail.meetings = r.meetings; if (state.meetingsDraft) state.meetingsDraft.reportLog = r.meetings.reportLog; }
+        closeMtgReport();
+        renderModal();
+        toast('Meeting report sent to ' + r.to.length + ' recipient' + (r.to.length === 1 ? '' : 's') + ' ✓');
+      } catch (err) {
+        el.disabled = false; el.textContent = '✈ Send report';
+        toast(err.message, true);
+      }
+      return;
+    }
     case 'open-mtg-todo': await openMtgTodo(); return;
     case 'mtg-todo-close': closeMtgTodo(); return;
     case 'mtg-todo-bg': if (e.target === el) closeMtgTodo(); return;
@@ -2491,8 +2724,8 @@ document.addEventListener('click', async (e) => {
       return;
     }
     case 'tpl-add': collectTemplates(); state.templates.questions.push({ id: 'q' + Math.random().toString(36).slice(2, 8), text: '' }); renderTemplates(); return;
-    case 'tpl-team-add': collectTemplates(); state.templates.team = (state.templates.team || []).concat([{ name: '', contact: '' }]); renderTemplates(); return;
-    case 'tpl-team-del': collectTemplates(); state.templates.team.splice(Number(el.dataset.i), 1); renderTemplates(); return;
+    case 'tpl-team-add': collectTemplates(); state.templates.team = (state.templates.team || []).concat([{ name: '', contact: '', email: '' }]); render(); return;
+    case 'tpl-team-del': collectTemplates(); state.templates.team.splice(Number(el.dataset.i), 1); render(); return;
     case 'tpl-del': collectTemplates(); state.templates.questions.splice(Number(el.dataset.i), 1); renderTemplates(); return;
     case 'tpl-up': case 'tpl-down': {
       collectTemplates();
@@ -2505,8 +2738,8 @@ document.addEventListener('click', async (e) => {
     case 'tpl-save': {
       try {
         state.templates = await api('PUT', '/api/templates', collectTemplates());
-        renderTemplates();
-        toast('Saved — new jobs will use the updated questions.');
+        render();
+        toast(state.view === 'settings' ? 'Team saved.' : 'Saved — new jobs will use the updated questions.');
       } catch (err) { toast(err.message, true); }
       return;
     }
@@ -2545,6 +2778,7 @@ document.addEventListener('click', async (e) => {
       } catch (err) { toast(err.message, true); }
       return;
     }
+    case 'set-tab': collectSettings(); collectTemplates(); state.settingsTab = el.dataset.tab; renderSettings(); return;
     case 'set-rule-add': collectSettings(); state.settings.rules.push({ keyword: '', category: 'rental' }); renderSettings(); return;
     case 'set-rule-del': collectSettings(); state.settings.rules.splice(Number(el.dataset.i), 1); renderSettings(); return;
     case 'set-rule-up': case 'set-rule-down': {
@@ -2722,6 +2956,15 @@ document.addEventListener('change', async (e) => {
     const which = e.target.id === 'mtgpreHeld' ? 'pre' : 'post';
     const dateEl = document.getElementById('mtg' + which + 'Date');
     if (e.target.checked && dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
+    return;
+  }
+  if (what === 'mtg-action-done') {
+    const row = e.target.closest('[data-mtg-action-row]');
+    if (row) row.classList.toggle('done', e.target.checked);
+    const rows = $$('[data-mtg-action-row]');
+    const open = rows.filter(r => { const c = r.querySelector('[data-ma-done]'); return !(c && c.checked); }).length;
+    const cnt = document.querySelector('.ma-count');
+    if (cnt) cnt.textContent = open + ' open · ' + rows.length + ' total';
     return;
   }
   if (what === 'removed-selall') {
