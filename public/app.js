@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 65';
+const BUILD = 'build 2026-07-14 · 66';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -101,7 +101,7 @@ const state = {
   contacts: null, contactsError: '',
   orgs: null, syncTimer: null,
   leads: null, leadsMeta: {}, poSearch: '', poShowCompleted: true,
-  smJobs: null, smSearch: '', smShowAll: false,
+  smJobs: null, smSearch: '', smShowAll: false, smInvoicedCollapsed: true,
   msSites: null, msLists: null, msCols: null, _msColsLoading: false
 };
 
@@ -2021,6 +2021,17 @@ function smStatusCell(j) {
   return '<span class="chip stage-new">Awaiting invoice</span>';
 }
 
+function smRowHtml(j) {
+  return '<tr class="' + (j.invoiced ? 'done' : '') + '">' +
+    '<td><b>' + esc(j.hwi) + '</b></td>' +
+    '<td>' + esc(j.customer || '—') + '</td>' +
+    '<td>' + esc(j.poNumber || '—') + '</td>' +
+    '<td class="num">' + smValueCell(j) + '</td>' +
+    '<td>' + esc(j.phase || '—') + '</td>' +
+    '<td>' + esc(fmtDate(j.receivedAt)) + '</td>' +
+    '<td>' + smStatusCell(j) + '</td>' +
+  '</tr>';
+}
 function smBodyHtml() {
   const all = state.smJobs || [];
   const q = state.smSearch.trim().toLowerCase();
@@ -2030,19 +2041,24 @@ function smBodyHtml() {
   const invoiced = rows.filter(j => j.invoiced).length;
   // Default view = the worklist: not-yet-invoiced + recently invoiced. "Show all" reveals older invoiced jobs.
   if (!state.smShowAll) rows = rows.filter(j => !j.invoiced || smIsRecent(j));
-  rows = rows.slice().sort((a, b) =>
-    (a.invoiced === b.invoiced) ? String(b.receivedAt || '').localeCompare(String(a.receivedAt || '')) : (a.invoiced ? 1 : -1));
-  const body = rows.length ? rows.map(j =>
-    '<tr class="' + (j.invoiced ? 'done' : '') + '">' +
-      '<td><b>' + esc(j.hwi) + '</b></td>' +
-      '<td>' + esc(j.customer || '—') + '</td>' +
-      '<td>' + esc(j.poNumber || '—') + '</td>' +
-      '<td class="num">' + smValueCell(j) + '</td>' +
-      '<td>' + esc(j.phase || '—') + '</td>' +
-      '<td>' + esc(fmtDate(j.receivedAt)) + '</td>' +
-      '<td>' + smStatusCell(j) + '</td>' +
-    '</tr>').join('')
-    : '<tr><td colspan="7" class="muted" style="text-align:center;padding:22px">Nothing matches</td></tr>';
+  const byRecent = (a, b) => String(b.receivedAt || '').localeCompare(String(a.receivedAt || ''));
+  const awaitingRows = rows.filter(j => !j.invoiced).sort(byRecent);
+  const invoicedRows = rows.filter(j => j.invoiced).sort(byRecent);
+  const collapsed = state.smInvoicedCollapsed !== false;   // invoiced (done) rows are collapsed by default
+  let body;
+  if (!awaitingRows.length && !invoicedRows.length) {
+    body = '<tr><td colspan="7" class="muted" style="text-align:center;padding:22px">Nothing matches</td></tr>';
+  } else {
+    body = awaitingRows.map(smRowHtml).join('');
+    if (invoicedRows.length) {
+      body += '<tr class="sm-group"><td colspan="7">' +
+        '<button class="sm-toggle" data-action="sm-toggle-invoiced">' +
+          '<span class="sm-caret">' + (collapsed ? '▸' : '▾') + '</span> ✓ Invoiced' + (state.smShowAll ? '' : ' (last ' + SM_RECENT_DAYS + ' days)') + ' · ' + invoicedRows.length +
+          '<span class="muted" style="font-weight:400"> — ' + (collapsed ? 'show' : 'hide') + '</span>' +
+        '</button></td></tr>';
+      if (!collapsed) body += invoicedRows.map(smRowHtml).join('');
+    }
+  }
   return '<div style="margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
       '<span class="chip stage-new">Awaiting invoice ' + awaiting + '</span>' +
       '<span class="chip plan-answered">✓ Invoiced (last ' + SM_RECENT_DAYS + ' days) ' + recent + '</span>' +
@@ -2053,7 +2069,7 @@ function smBodyHtml() {
       '<tr><th>HWI job no.</th><th>Customer</th><th>PO number</th><th class="num">Value</th><th>Phase</th><th>Received</th><th>Invoice status</th></tr>' +
       body +
     '</table></div>' +
-    '<p class="hint" style="max-width:none">Received jobs come from <b>Shop Master</b>, cross-referenced with Zoho Books by the <b>HWI</b> (the invoice’s Project). By default this shows the worklist — <b>not-yet-invoiced</b> jobs plus anything <b>invoiced in the last ' + SM_RECENT_DAYS + ' days</b>. Tick <b>show all invoiced</b> to see older ones.<br>Invoiced jobs show the <b>actual</b> amount from Zoho. Jobs still awaiting an invoice show a <i>~projected</i> value from the SharePoint <b>Lead List</b> (ValueTotal), matched by <b>HWI</b> (the lead’s QuoteNum).</p>';
+    '<p class="hint" style="max-width:none">Received jobs come from <b>Shop Master</b>, cross-referenced with Zoho Books by the <b>HWI</b> (the invoice’s Project). The <b>awaiting-invoice worklist</b> is shown; already-<b>invoiced</b> jobs are collapsed — click the <b>✓ Invoiced</b> row to expand. Tick <b>show all invoiced</b> to include jobs invoiced more than ' + SM_RECENT_DAYS + ' days ago.<br>Invoiced jobs show the <b>actual</b> amount from Zoho. Jobs still awaiting an invoice show a <i>~projected</i> value from the SharePoint <b>Lead List</b> (ValueTotal), matched by <b>HWI</b> (the lead’s QuoteNum).</p>';
 }
 
 function renderShopmaster() {
@@ -2903,6 +2919,7 @@ document.addEventListener('click', async (e) => {
       renderSettings(); return;
     }
     case 'sm-refresh': { state.smJobs = null; renderShopmaster(); return; }
+    case 'sm-toggle-invoiced': { state.smInvoicedCollapsed = (state.smInvoicedCollapsed === false); const b = $('#smBody'); if (b) b.innerHTML = smBodyHtml(); return; }
     case 'set-travel-mode': {
       const hwi = el.dataset.hwi;
       const clicked = el.dataset.mode;          // 'fly' | 'drive'

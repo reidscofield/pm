@@ -185,6 +185,11 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
   .dash-body { flex-direction: column; }
   .dash-side { flex: none; width: 100%; position: static; }
 }
+/* Invoices: collapsible "invoiced" group */
+.sm-group td { padding: 0; background: #eef3f7; border-top: 1px solid var(--line); }
+.sm-toggle { width: 100%; text-align: left; background: none; border: 0; padding: 9px 10px; font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; }
+.sm-toggle:hover { background: #e3ebf1; }
+.sm-caret { display: inline-block; width: 12px; color: var(--muted); }
 
 .card {
   position: relative;
