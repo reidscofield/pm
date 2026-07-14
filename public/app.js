@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 66';
+const BUILD = 'build 2026-07-14 · 67';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -2053,8 +2053,7 @@ function smBodyHtml() {
     if (invoicedRows.length) {
       body += '<tr class="sm-group"><td colspan="7">' +
         '<button class="sm-toggle" data-action="sm-toggle-invoiced">' +
-          '<span class="sm-caret">' + (collapsed ? '▸' : '▾') + '</span> ✓ Invoiced' + (state.smShowAll ? '' : ' (last ' + SM_RECENT_DAYS + ' days)') + ' · ' + invoicedRows.length +
-          '<span class="muted" style="font-weight:400"> — ' + (collapsed ? 'show' : 'hide') + '</span>' +
+          '<span class="sm-caret">' + (collapsed ? '▾' : '▴') + '</span> ✓ Invoiced' + (state.smShowAll ? '' : ' (last ' + SM_RECENT_DAYS + ' days)') + ' · ' + invoicedRows.length +
         '</button></td></tr>';
       if (!collapsed) body += invoicedRows.map(smRowHtml).join('');
     }
