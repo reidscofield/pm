@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 68';
+const BUILD = 'build 2026-07-14 · 69';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -550,8 +550,7 @@ function detailTabHtml(d) {
         '<td class="num">' + esc(li.total === undefined ? '' : Number(li.total).toLocaleString()) + '</td></tr>'
       ).join('') + '</table>'
     : (j.module === 'lead'
-      ? '<p class="muted">This job comes from the SharePoint lead list (PO ' + esc(j.reference || '—') + '). ' +
-        'It will leave the dashboard automatically once an invoice carrying that PO number appears in Zoho Books — see the Invoices page.</p>'
+      ? '<p class="muted">From the SharePoint lead list (PO ' + esc(j.reference || '—') + '). Leaves the dashboard once it’s invoiced in Zoho.</p>'
       : '<p class="muted">No line items available for this record.</p>');
 
   return '<div class="detail-grid">' +
@@ -673,8 +672,7 @@ function travelTabHtml(d) {
   const hwi = j.hwi || '';
   if (!hwi) {
     return '<div class="travel-tab">' +
-      '<p class="hint">This job doesn’t have an <b>HWI</b> number yet, so a travel decision can’t be linked to the travel app. ' +
-      'Once the job has an HWI (after the next sync), Fly/Drive can be set here.</p></div>';
+      '<p class="hint">No <b>HWI</b> number yet — Fly/Drive can be set here once the job has one (after the next sync).</p></div>';
   }
   const m = j.travelMode || null;
   const btn = (val, icon, label) =>
@@ -688,7 +686,7 @@ function travelTabHtml(d) {
     : '<div class="travel-status">No decision yet. <span class="muted">Until you choose, the travel app lets the booker pick fly or drive.</span></div>';
   return '<div class="travel-tab">' +
     '<h3 style="margin:2px 0 4px">How is the crew getting there?</h3>' +
-    '<p class="hint" style="margin-top:0">Decide how the team travels for <b>' + esc(hwi) + '</b>. Your choice is sent straight to the <b>travel app</b>, which locks its trip planner so the booker can’t pick the other mode by mistake.</p>' +
+    '<p class="hint" style="margin-top:0">Set fly/drive for <b>' + esc(hwi) + '</b> — sent to the <b>travel app</b>, which locks the booker to your choice.</p>' +
     '<div class="tmode tmode-lg" style="margin:14px 0">' + btn('fly', '✈', 'Fly') + btn('drive', '🚗', 'Drive') + '</div>' +
     decided +
     (m ? '<button class="btn ghost" data-action="set-travel-mode" data-hwi="' + esc(hwi) + '" data-mode="' + m + '" style="margin-top:14px">Clear decision</button>' : '') +
@@ -750,7 +748,7 @@ function meetingsTabHtml(d) {
     '</div>';
   };
   return '<div class="mtg">' +
-    '<p class="muted" style="line-height:1.5;margin-bottom:6px">Track the meetings for this job — tick <b>held</b> and it stamps the date. A job with a pre-job meeting but no post-job one shows under <b>📋 Post-job to-do</b> on the dashboard.</p>' +
+    '<p class="muted" style="line-height:1.5;margin-bottom:6px">Tick <b>held</b> to stamp the date. Jobs missing their post-job meeting appear under <b>📋 Post-job to-do</b> on the dashboard.</p>' +
     block('pre', 'Pre-job meeting', 'Planning, coordination, safety brief — who attended, key points…') +
     mtgActionListHtml((m.pre && m.pre.actions) || []) +
     block('post', 'Post-job meeting', 'Debrief / lessons learned — what went well, what to improve, follow-ups…') +
@@ -974,7 +972,7 @@ function mtgReportOverlayHtml(d) {
         '<button class="btn-icon dialog-close" data-action="mtg-report-close" title="Close">✕</button></div>' +
       '<div class="dialog-body">' +
         (ready ? '' : '<div class="banner" style="background:#eef4fb;border:1px solid #cfe0f2;color:#25507d">ℹ️ When you press Send, a quick Microsoft popup confirms it’s you (usually no password needed) — then the report goes out from your account.</div>') +
-        '<p class="hint" style="margin:2px 0 8px">Sent from <b>your</b> account to everyone ticked below. <b>Everyone is selected except Mike Scofield</b> — tick or untick anyone.' + (missing ? ' <b>' + missing + '</b> selected still need an email.' : '') + '</p>' +
+        '<p class="hint" style="margin:2px 0 8px">Sent from <b>your</b> account to everyone ticked (all except Mike Scofield by default).' + (missing ? ' <b>' + missing + '</b> still need an email.' : '') + '</p>' +
         '<label class="chk rpt-selall-row"><input type="checkbox" id="rptSelAll" data-change="rpt-selall"> Select / clear all</label>' +
         '<div class="rpt-recips">' + recipRows + '</div>' +
         '<p style="margin:12px 0 4px"><b>Report contents</b> — ' + actions.length + ' action item' + (actions.length === 1 ? '' : 's') + ' (' + open + ' open)</p>' +
@@ -1622,7 +1620,7 @@ function procSendConfirmHtml(d) {
 
   if (!conf.previewed) {
     return '<div class="proc-confirm">' + head +
-      '<p class="hint" style="margin:10px 0"><b>Step 1 of 2 — review.</b> You must <b>preview the procedure</b> before you can send it. Opening the preview unlocks the next step.</p>' +
+      '<p class="hint" style="margin:10px 0"><b>Step 1 of 2.</b> Preview the procedure to unlock sending.</p>' +
       '<div class="plan-actions">' +
         '<button class="btn primary" data-action="proc-send-preview">👁 Preview the procedure</button>' +
         '<button class="btn" data-action="proc-send-cancel">← Cancel</button>' +
@@ -1631,11 +1629,11 @@ function procSendConfirmHtml(d) {
   }
   return '<div class="proc-confirm">' + head +
     '<div style="color:#1d6f37;font-weight:600;margin:8px 0">✓ Procedure previewed</div>' +
-    '<p class="hint" style="margin-bottom:8px"><b>Step 2 of 2 — send.</b> Tick a contact on file, or type the customer’s email address.</p>' +
+    '<p class="hint" style="margin-bottom:8px"><b>Step 2 of 2.</b> Tick a contact or type the customer’s email.</p>' +
     contactsBoxHtml() +
     '<div style="margin-top:8px"><label>Customer email</label><input id="procEmail" type="email" placeholder="name@customer.com" value="' + esc(p.email || '') + '"></div>' +
     '<div style="margin-top:10px"><b>Subject:</b> ' + esc(m.subject) + '</div>' +
-    '<p class="hint" style="margin:8px 0">Once you press send, the full procedure emails to that address from your account.</p>' +
+    '<p class="hint" style="margin:8px 0">Sends from your account.</p>' +
     '<div class="plan-actions">' +
       '<button class="btn" data-action="proc-send-preview">👁 Preview again</button>' +
       '<button class="btn primary" data-action="proc-send-confirm">✈ Send now</button>' +
@@ -1658,7 +1656,7 @@ function procedureTabHtml(d) {
   const p = state.procedureDraft;
   if (!state.procedureSetup) state.procedureSetup = (p && p.setup) ? Object.assign(defaultSetup(d.job, d.planning), p.setup) : defaultSetup(d.job, d.planning);
   if (!p) {
-    return '<p class="muted" style="line-height:1.6;margin-bottom:10px">Pick the job type and answer a few questions, then <b>Generate</b> — it builds a tailored, fully editable draft. No AI; the same answers always produce the same procedure.</p>' +
+    return '<p class="muted" style="line-height:1.6;margin-bottom:10px">Pick the job type, answer a few questions, then <b>Generate</b> an editable draft. No AI — same answers, same procedure.</p>' +
       setupPanelHtml(state.procedureSetup, d.job);
   }
   if (state.procSendConfirm) return procSendConfirmHtml(d);
@@ -2176,7 +2174,7 @@ function teamPanelHtml() {
   const t = state.templates || {};
   return '<div class="panel">' +
     '<h2>Team / employees <span class="muted" style="font-weight:400;font-size:13px">(Hydro-Wates staff)</span></h2>' +
-    '<p class="hint">Your staff roster. The <b>name</b> appears in the dropdowns when you assign <b>Responsibilities</b> in a procedure and <b>Action items</b> in a meeting. The <b>email</b> is where the <b>meeting report</b> is sent — to everyone here <b>except Mike Scofield</b>.</p>' +
+    '<p class="hint">Your staff roster. Names fill the <b>Responsibilities</b> and <b>Action item</b> dropdowns; <b>emails</b> receive the meeting report.</p>' +
     '<div class="team-head"><span>Name</span><span>Phone</span><span>Email</span><span></span></div>' +
     teamRowsHtml(t) +
     '<button class="btn small" data-action="tpl-team-add">+ Add person</button>' +
@@ -2213,13 +2211,13 @@ function renderTemplates() {
   $('#view').innerHTML =
     '<div class="panel">' +
       '<h2>Standard planning questions</h2>' +
-      '<p class="hint">This is the master list loaded for every new job. You can still edit the questions per job before sending — changes here only affect jobs planned from now on.</p>' +
+      '<p class="hint">Master list loaded into every new job (still editable per job). Changes apply to future jobs only.</p>' +
       qs +
       '<button class="btn small" data-action="tpl-add">+ Add question</button>' +
     '</div>' +
     '<div class="panel">' +
       '<h2>Email wording</h2>' +
-      '<p class="hint">Used when you press “Open email draft” on a job. Placeholders: <b>{customer}</b> = customer name, <b>{job}</b> = job number.</p>' +
+      '<p class="hint">Used for “Open email draft”. Placeholders: <b>{customer}</b>, <b>{job}</b>.</p>' +
       '<div style="margin-bottom:12px"><label>Subject</label><input id="tplSubject" value="' + esc(t.emailSubject) + '"></div>' +
       '<div style="margin-bottom:12px"><label>Opening</label><textarea id="tplIntro" rows="3">' + esc(t.emailIntro) + '</textarea></div>' +
       '<div style="margin-bottom:12px"><label>Closing</label><textarea id="tplOutro" rows="3">' + esc(t.emailOutro) + '</textarea></div>' +
@@ -2227,7 +2225,7 @@ function renderTemplates() {
     '</div>' +
     '<div class="panel">' +
       '<h2>Standard equipment <span class="muted" style="font-weight:400;font-size:13px">(load-test kit)</span></h2>' +
-      '<p class="hint">This list is pre-loaded into the <b>Equipment &amp; materials</b> section (step 4) of every new procedure — you then edit it per job (sizes, quantities). One item per line.</p>' +
+      '<p class="hint">Pre-loaded into every procedure’s equipment list; edit per job. One item per line.</p>' +
       '<textarea id="tplEquip" rows="' + Math.max(6, (t.equipment || []).length + 1) + '">' + esc((t.equipment || []).join('\n')) + '</textarea>' +
       '<div style="margin-top:12px"><button class="btn primary" data-action="tpl-save">Save equipment</button></div>' +
     '</div>';
@@ -2390,18 +2388,18 @@ function renderSettings() {
 
   const zohoPanel =
     '<div class="panel"><h2>Zoho Books connection</h2>' +
-      '<p class="hint">The app only <b>reads</b> from Zoho Books — it never changes anything there.</p>' + connHtml +
+      '<p class="hint">Read-only — the app never changes Zoho Books.</p>' + connHtml +
     '</div>';
 
   const spPanel =
     '<div class="panel"><h2>SharePoint lead list</h2>' +
-      '<p class="hint">Feeds the <b>Invoices</b> page: every lead in your list that has received a PO, marked completed automatically once it is invoiced in Zoho Books. Read-only — the app never changes the list.</p>' +
+      '<p class="hint">Read-only feed for the <b>Invoices</b> page.</p>' +
       spHtml +
     '</div>';
 
   const shopmasterPanel =
     '<div class="panel"><h2>Shop Master <span class="muted" style="font-weight:400;font-size:13px">(received-jobs feed for the Invoices page)</span></h2>' +
-      '<p class="hint">Read-only connection to Shop Master’s Supabase database. The <b>Invoices</b> page lists your received jobs from here and cross-references Zoho Books to show which are invoiced. ' +
+      '<p class="hint">Read-only feed for the <b>Invoices</b> page. ' +
         (s.shopmasterConnected ? '<b style="color:#1d6f37">● Connected</b>' : '<b style="color:#a02626">● Not connected</b>') + '</p>' +
       '<div class="frow">' +
         '<div><label>Supabase project URL</label><input id="smUrl" value="' + esc((s.shopmaster && s.shopmaster.url) || '') + '" placeholder="https://xxxx.supabase.co"></div>' +
@@ -2425,8 +2423,7 @@ function renderSettings() {
 
   const rulesPanel =
     '<div class="panel"><h2>Rental / Service / Sales rules</h2>' +
-      '<p class="hint">Each job is matched against these keywords (checked against its line items, reference, notes and customer name). ' +
-      '<b>First match wins</b>, top to bottom. Anything that matches nothing goes to the default. You can always override a single job from its Details tab.</p>' +
+      '<p class="hint">Keywords matched top-to-bottom; <b>first match wins</b>, otherwise the default. Override any job on its Details tab.</p>' +
       (s.rules.length ? s.rules.map((r, i) =>
         '<div class="rule-row">' +
           '<input data-rk value="' + esc(r.keyword) + '" placeholder="keyword, e.g. rental">' +
@@ -2444,7 +2441,7 @@ function renderSettings() {
 
   const demoPanel =
     '<div class="panel"><h2>Demo data</h2>' +
-      '<p class="hint"><b>Demo data is fake sample jobs — for demonstrations and testing only.</b> It never touches or shows your real jobs. Keep it <b>off</b> for normal use; turn it <b>on</b> only when you want to show the app with placeholder data.</p>' +
+      '<p class="hint"><b>Fake sample jobs — for demos and testing only</b>, never your real jobs. Keep it off for normal use.</p>' +
       '<select id="setDemo" style="max-width:380px">' +
         '<option value="off"' + (s.demoMode === 'on' ? '' : ' selected') + '>Off — use my real jobs</option>' +
         '<option value="on"' + (s.demoMode === 'on' ? ' selected' : '') + '>On — show demo data only (demos &amp; testing)</option>' +
