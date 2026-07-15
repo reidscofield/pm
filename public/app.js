@@ -1,7 +1,7 @@
 /* Hydro-Wates Project Manager — front end */
 'use strict';
 
-const BUILD = 'build 2026-07-14 · 69';
+const BUILD = 'build 2026-07-15 · 70';
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -18,8 +18,13 @@ function emailReady() {
 // sending), falling back to the company name when a login carries no name.
 function userFromSession(session) {
   if (!session || !session.user) return null;
-  const u = session.user, md = u.user_metadata || {};
-  return { email: u.email || '', name: String(md.full_name || md.name || md.display_name || '').trim() };
+  const u = session.user, md = u.user_metadata || {}, am = u.app_metadata || {};
+  return {
+    email: u.email || '',
+    name: String(md.full_name || md.name || md.display_name || '').trim(),
+    provider: am.provider || '',
+    providers: am.providers || []
+  };
 }
 function signOff() {
   return (currentUser && currentUser.name) || 'Hydro-Wates';
@@ -2288,6 +2293,28 @@ function settingsPayload(s) {
   };
 }
 
+// Account sub-tab: who you're signed in as + whether you can send email as yourself.
+function accountPanelHtml() {
+  const u = currentUser || {};
+  const ready = emailReady();
+  const method = u.provider === 'azure' ? 'Microsoft' : (u.provider === 'email' ? 'Email &amp; password' : '—');
+  const signedIn = u.name || u.email;
+  return '<div class="panel">' +
+    '<h2>Account</h2>' +
+    (signedIn
+      ? '<div class="acct-grid">' +
+          '<div class="acct-label">Signed in as</div><div class="acct-val"><b>' + esc(u.name || u.email) + '</b>' + (u.name && u.email ? ' <span class="muted">· ' + esc(u.email) + '</span>' : '') + '</div>' +
+          '<div class="acct-label">Sign-in method</div><div class="acct-val">' + method + '</div>' +
+          '<div class="acct-label">Email sending</div><div class="acct-val">' +
+            (ready
+              ? '<b style="color:#1d6f37">● Ready</b> <span class="muted">— reports and procedures send as you</span>'
+              : '<b style="color:#a02626">● Not connected</b> <button class="btn small" data-action="account-connect-ms" style="margin-left:8px">Connect Microsoft</button> <span class="muted" style="font-size:12px">— to send email as yourself</span>') +
+          '</div>' +
+        '</div>'
+      : '<p class="hint">Not signed in (login is off in local dev).</p>') +
+    '<div style="margin-top:16px"><button class="btn danger" data-action="logout">Sign out</button></div>' +
+  '</div>';
+}
 function renderSettings() {
   const s = state.settings;
   const dcs = [['com', 'zoho.com (US)'], ['eu', 'zoho.eu (Europe)'], ['in', 'zoho.in (India)'],
@@ -2453,9 +2480,10 @@ function renderSettings() {
     connections: zohoPanel + spPanel + shopmasterPanel + saveBar,
     rules: jobCountPanel + rulesPanel + saveBar,
     team: teamPanelHtml(),
-    prefs: demoPanel + saveBar
+    prefs: demoPanel + saveBar,
+    account: accountPanelHtml()
   };
-  const TABS = [['connections', 'Connections'], ['rules', 'Job rules'], ['team', 'Team'], ['prefs', 'Preferences']];
+  const TABS = [['connections', 'Connections'], ['rules', 'Job rules'], ['team', 'Team'], ['prefs', 'Preferences'], ['account', 'Account']];
   const tab = groups[state.settingsTab] ? state.settingsTab : 'connections';
   const tabBar = '<div class="subtabs">' +
     TABS.map(([k, l]) => '<button class="subtab' + (tab === k ? ' active' : '') + '" data-action="set-tab" data-tab="' + k + '">' + l + '</button>').join('') +
@@ -2903,6 +2931,13 @@ document.addEventListener('click', async (e) => {
       return;
     }
     case 'set-tab': collectSettings(); collectTemplates(); state.settingsTab = el.dataset.tab; renderSettings(); return;
+    case 'account-connect-ms': {
+      el.disabled = true; el.textContent = 'Connecting…';
+      const tok = await reauthMicrosoftPopup();
+      render();
+      toast(tok ? 'Microsoft email connected — you can send as yourself ✓' : 'Microsoft sign-in was cancelled or blocked.', !tok);
+      return;
+    }
     case 'set-rule-add': collectSettings(); state.settings.rules.push({ keyword: '', category: 'rental' }); renderSettings(); return;
     case 'set-rule-del': collectSettings(); state.settings.rules.splice(Number(el.dataset.i), 1); renderSettings(); return;
     case 'set-rule-up': case 'set-rule-down': {

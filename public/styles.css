@@ -82,6 +82,8 @@ label { font-size: 13px; color: var(--muted); display: block; margin: 0 0 4px; }
 .subtab:hover { color: var(--ink); background: #f6f9fb; }
 .subtab.active { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
 .set-savebar { margin-top: 4px; }
+.acct-grid { display: grid; grid-template-columns: 150px 1fr; gap: 10px 14px; align-items: center; font-size: 14px; }
+.acct-label { color: var(--muted); font-size: 13px; }
 
 /* ---------- layout ---------- */
 .view { padding: 20px 22px 60px; max-width: 1500px; margin: 0 auto; }
